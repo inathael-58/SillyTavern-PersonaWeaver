@@ -6,7 +6,7 @@ import {
     buildTranscript, styleStats, loreBookName, loreEntryFields, estimateTokens,
     SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion, parseIdeas, mergeIdeas, ideaSplit, LABELS,
 } from '../core.js';
-import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt } from '../prompts.js';
+import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt, genderRule } from '../prompts.js';
 import { STRINGS, fmt, resolveUiLang } from '../i18n.js';
 
 test('i18n: every language has exactly the same keys, none empty, same placeholders', () => {
@@ -355,4 +355,57 @@ test('appearance layer: own label, spec sized per persona size, round-trips thro
     }
     const e = buildEvolvePrompt({ lang: 'en', name: 'K', sections: { core: 'c' }, transcript: 'x' });
     assert.ok(e.prompt.includes('LOOK'));
+});
+
+test('premise leads the weave prompt and outranks the old draft and the opening scene', () => {
+    const card = { name: 'Iris', text: 'knight', greeting: '{{char}} finds {{user}} in the desert.' };
+    const w = buildWeavePrompt({ lang: 'en', name: 'K', notes: '', sections: { core: 'A wandering merchant.' }, charCard: card, premise: 'Djinn\nBound to {{char}}\'s lamp' });
+    const iPremise = w.prompt.indexOf('PREMISE');
+    assert.ok(iPremise > 0 && iPremise < w.prompt.indexOf('CURRENT DRAFT') && iPremise < w.prompt.indexOf('OPENING SCENE'));
+    assert.ok(w.prompt.includes('Bound to [[char]]\'s lamp'));
+    assert.ok(w.prompt.includes('anything that contradicts or ignores the premise is outdated'));
+    assert.ok(w.prompt.includes('the PREMISE decides who [[user]] really is'));
+    assert.ok(!w.prompt.includes('the persona must fit it and must not contradict it'));
+    assert.ok(w.prompt.includes('(none beyond the premise)'));
+    const plain = buildWeavePrompt({ lang: 'en', name: 'K', notes: 'n', sections: { core: 'c' }, charCard: card });
+    assert.ok(!plain.prompt.includes('PREMISE') && plain.prompt.includes('treat it as the author\'s intent'));
+});
+
+test('lore prompt builds on the premise and keeps the bot as background', () => {
+    const l = buildLorePrompt({ lang: 'en', name: 'K', notes: '', sections: { core: 'c' }, charCard: { name: 'Iris', text: 'knight' }, premise: 'Djinn of the lamp', gender: 'female' });
+    assert.ok(l.prompt.includes('PREMISE') && l.prompt.includes('Djinn of the lamp'));
+    assert.ok(l.prompt.includes('grow directly out of the PREMISE'));
+    assert.ok(l.prompt.includes('Background only'));
+    assert.ok(l.prompt.includes('FEMALE'));
+    const plain = buildLorePrompt({ lang: 'en', name: 'K', notes: 'n', sections: {} });
+    assert.ok(!plain.prompt.includes('PREMISE') && plain.prompt.includes('make sense for any persona is wrong'));
+});
+
+test('gender rule: pronouns per language, custom pronouns, nothing when unset', () => {
+    assert.equal(genderRule('', '', 'th'), '');
+    const f = genderRule('female', '', 'th');
+    assert.ok(f.includes('she/her') && f.includes('เธอ') && f.includes('ค่ะ') && f.includes('never ครับ'));
+    const m = genderRule('male', '', 'en');
+    assert.ok(m.includes('he/him') && !m.includes('Thai'));
+    assert.ok(genderRule('nonbinary', '', 'th').includes('they/them'));
+    assert.ok(genderRule('', 'ข้า/เจ้า', 'th').includes('ข้า/เจ้า'));
+    assert.ok(!/\{\{/.test(genderRule('', '{{user}}', 'en')));
+});
+
+test('gender reaches every prompt that writes about the persona', () => {
+    const g = { gender: 'male' };
+    const card = { name: 'Iris', text: 'knight' };
+    const stats = { count: 3, medianChars: 1, avgChars: 1, shortPct: 0, questionPct: 0, exclaimPct: 0, ellipsisPct: 0, quotedSpeechPct: 0, actionMarkupPct: 0 };
+    const all = [
+        buildWeavePrompt({ lang: 'en', name: 'K', notes: 'n', sections: {}, ...g }),
+        buildIdeasPrompt({ lang: 'en', charCard: card, ...g }),
+        buildLorePrompt({ lang: 'en', name: 'K', notes: 'n', sections: {}, ...g }),
+        buildCondensePrompt({ lang: 'en', name: 'K', sections: { core: 'c' }, ...g }),
+        buildMinePrompt({ lang: 'en', name: 'K', transcript: 't', stats, ...g }),
+        buildEvolvePrompt({ lang: 'en', name: 'K', sections: { core: 'c' }, transcript: 't', ...g }),
+    ];
+    for (const p of all) assert.ok(p.prompt.includes('MALE') && p.prompt.includes('he/him'));
+    assert.ok(all[0].prompt.includes('CORE opens with [[user]]\'s gender'));
+    assert.ok(all[1].prompt.includes('Every idea keeps this gender'));
+    assert.ok(!buildEvolvePrompt({ lang: 'en', name: 'K', sections: { core: 'c' }, transcript: 't' }).prompt.includes('\n\n\n'), 'no blank block when unset');
 });
