@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.3.0'; // keep in sync with manifest.json
+const VERSION = '0.4.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -46,6 +46,7 @@ const DEFAULTS = Object.freeze({
     otherTokens: 1000,
     messages: 40,
     size: 'lean',
+    ideaMix: 'mix',
     source: 'main',
     timeoutSec: 120,
 });
@@ -298,25 +299,33 @@ async function weave(keys) {
     });
 }
 
-async function suggestIdeas() {
+function ideaMix() {
+    return core.IDEA_MIXES.includes(settings().ideaMix) ? settings().ideaMix : 'mix';
+}
+
+/** A batch of ideas. With `more`, adds to the list and asks the model not to repeat what is there. */
+async function suggestIdeas(more = false) {
     await run(async () => {
         const t = ui();
         const card = currentCharCard();
         if (!card) throw new Error(t.ideasNeedChar);
-        const p = prompts.buildIdeasPrompt({ lang: concreteLang(), notes: state.notes, charCard: card });
-        const raw = await callModel(p, settings().otherTokens, fmt(t.task_ideas, { name: card.name }));
-        const ideas = core.parseIdeas(raw);
-        if (!ideas.length) throw new Error(t.errFormat);
-        state.ideas = ideas.map(i => ({ title: tidy(i.title), text: tidy(i.text) }));
+        const avoid = more ? state.ideas.map(i => i.title) : [];
+        const p = prompts.buildIdeasPrompt({ lang: concreteLang(), notes: state.notes, charCard: card, mix: ideaMix(), avoid });
+        const task = fmt(more ? t.task_ideasMore : t.task_ideas, { name: card.name, n: p.count, kind: t['ideaMix_' + ideaMix()] });
+        const raw = await callModel(p, settings().weaveTokens, task);
+        const batch = core.parseIdeas(raw).map(i => ({ kind: i.kind, title: tidy(i.title), text: tidy(i.text), used: false }));
+        if (!batch.length) throw new Error(t.errFormat);
+        state.ideas = more ? core.mergeIdeas(state.ideas, batch) : batch;
     });
 }
 
+/** Put an idea into the notes. The list stays, so ideas can be combined. */
 function useIdea(i) {
     const idea = state.ideas[i];
-    if (!idea) return;
+    if (!idea || idea.used) return;
     const block = `${idea.title}\n${idea.text}`;
     state.notes = state.notes.trim() ? `${state.notes.trim()}\n\n${block}` : block;
-    state.ideas = [];
+    idea.used = true;
 }
 
 async function condense() {
@@ -593,16 +602,32 @@ function charPicker(dis) {
 function ideasBlock(dis) {
     const t = ui();
     const hasChar = Boolean(currentCharCard());
+    const off = hasChar ? '' : 'disabled';
+    const mix = ideaMix();
+    const mixOpts = core.IDEA_MIXES
+        .map(m => `<option value="${m}" ${m === mix ? 'selected' : ''}>${esc(t['ideaMix_' + m])}</option>`)
+        .join('');
+    const cards = state.ideas.map((idea, i) => `
+<div class="pw-idea ${idea.kind === 'wild' ? 'pw-idea-wild' : ''} ${idea.used ? 'pw-idea-used' : ''}">
+  <div class="pw-idea-head">
+    <span class="pw-badge">${idea.kind === 'wild' ? `<i class="fa-solid fa-bolt"></i> ${esc(t.ideaWild)}` : esc(t.ideaFit)}</span>
+    <b>${esc(idea.title)}</b>
+  </div>
+  <div>${esc(idea.text).replace(/\n/g, '<br>')}</div>
+  <button class="menu_button pw-mini" data-act="useIdea:${i}" ${dis} ${idea.used ? 'disabled' : ''}><i class="fa-solid fa-${idea.used ? 'check' : 'arrow-down'}"></i> ${esc(idea.used ? t.ideasUsed : t.ideasUse)}</button>
+</div>`).join('');
     return `
 <div class="pw-row">
-  <button class="menu_button" data-act="ideas" ${dis} ${hasChar ? '' : 'disabled'} title="${esc(hasChar ? t.ideasRun : t.ideasNeedChar)}"><i class="fa-solid fa-lightbulb"></i> ${esc(t.ideasRun)}</button>
+  <label class="pw-inline">${esc(t.ideaMixLabel)}
+    <select class="text_pole" data-field="ideaMix" ${dis}>${mixOpts}</select>
+  </label>
+  <button class="menu_button" data-act="ideas" ${dis} ${off} title="${esc(hasChar ? t.ideasRun : t.ideasNeedChar)}"><i class="fa-solid fa-lightbulb"></i> ${esc(t.ideasRun)}</button>
 </div>
-${state.ideas.map((idea, i) => `
-<div class="pw-idea">
-  <b>${esc(idea.title)}</b>
-  <div>${esc(idea.text).replace(/\n/g, '<br>')}</div>
-  <button class="menu_button pw-mini" data-act="useIdea:${i}" ${dis}><i class="fa-solid fa-arrow-down"></i> ${esc(t.ideasUse)}</button>
-</div>`).join('')}`;
+${state.ideas.length ? `<div class="pw-ideas">${cards}</div>
+<div class="pw-row">
+  <button class="menu_button" data-act="ideasMore" ${dis} ${off}><i class="fa-solid fa-plus"></i> ${esc(t.ideasMore)}</button>
+  <button class="menu_button" data-act="ideasClear" ${dis}><i class="fa-solid fa-broom"></i> ${esc(t.ideasClear)}</button>
+</div>` : ''}`;
 }
 
 function weaveBody(dis) {
@@ -964,7 +989,9 @@ function onClick(event) {
         case 'weaveAll': weave(SECTION_KEYS); return;
         case 'regen': weave([arg]); return;
         case 'loreGen': generateLore(); return;
-        case 'ideas': suggestIdeas(); return;
+        case 'ideas': suggestIdeas(false); return;
+        case 'ideasMore': suggestIdeas(true); return;
+        case 'ideasClear': state.ideas = []; render(); return;
         case 'useIdea': useIdea(Number(arg)); render(); return;
         case 'condense': condense(); return;
         case 'reloadNew': reloadWithFreshFiles(); return;
@@ -1006,6 +1033,7 @@ function onChange(event) {
         state.target = el.value;
         if (state.target === 'active' && !state.notes.trim() && !hasSections()) loadActive();
     } else if (field === 'selectAfter') state.selectAfter = el.checked;
+    else if (field === 'ideaMix') { settings().ideaMix = core.IDEA_MIXES.includes(el.value) ? el.value : 'mix'; saveSettingsDebounced(); return; }
     else if (field === 'charSel') {
         state.charSel = el.value;
         state.ideas = [];

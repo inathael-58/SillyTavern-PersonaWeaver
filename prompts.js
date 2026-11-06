@@ -5,7 +5,7 @@
 // The persona is sent on every turn, so every block is written to a size budget (core.SIZES).
 // The line caps asked for here are also enforced on the output by core.fitLayer().
 
-import { SECTION_KEYS, LABELS, maskMacros, formatStats, sizeSpec } from './core.js';
+import { SECTION_KEYS, LABELS, maskMacros, formatStats, sizeSpec, ideaSplit } from './core.js';
 
 const PRINCIPLES = `You are a character-writing editor for a roleplay platform. You write persona sheets for the PLAYER's character, called [[user]] in the sheet. Another AI reads the sheet on EVERY turn to roleplay with [[user]] or to write [[user]]'s turns, so every word costs tokens on every turn.
 
@@ -35,7 +35,8 @@ export function blockSpecs(size) {
     const L = s.lines;
     const w = s.lineWords;
     return {
-        core: `CORE: at most ${s.coreWords} words. Who [[user]] is, what they do, what they want right now. Keep every fact that shapes how [[user]] acts now; compress hard.`,
+        core: `CORE: at most ${s.coreWords} words. Who [[user]] is, what they do, what they want right now. Keep every fact that shapes how [[user]] acts now; compress hard. Leave looks to LOOK.`,
+        look: `LOOK: at most ${s.lookWords} words of what others see and notice: build and height, face, hair and eyes, how they dress or a signature item, and one distinctive detail (a scar, a scent, a way of standing). Concrete nouns, fitting the story's world; no generic beauty words. Keep any appearance the author or the opening scene already gave, exactly.`,
         tension: `TENSION: exactly ${L.tension} one-line contradictions, at most ${w} words each, written as pairs: wants X / needs Y; says A / means B; fears C / hides it by doing D. Specific to this person.`,
         voice: `VOICE: at most ${s.voiceWords} words on how [[user]] talks: rhythm, sentence length, verbal habits, what they never say. Do not repeat what the samples already show.`,
         samples: `SAMPLES: exactly ${L.samples} lines of dialogue in this exact voice, one per line, each starting with its situation in parentheses: ${moods(L.samples)}. At most ${w} words each. Dialogue only, no narration.`,
@@ -130,19 +131,46 @@ export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes,
     return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };
 }
 
-/** Ideas: a few short persona concepts that fit a bot, for a fresh start with no chat yet. */
-export function buildIdeasPrompt({ lang, notes, charCard }) {
+/** Directions for unexpected ideas. The model picks different ones for each wild idea. */
+const WILD_ANGLES = [
+    '[[user]] is not what the scene assumes (not human, not alone, not from this time, already dead, the one everyone is looking for)',
+    'a hidden past connection to [[char]] that [[char]] has forgotten, misremembers or never knew about',
+    'a reversal of power or role: [[user]] holds the leverage, the debt, the secret or the authority [[char]] expects to hold',
+    'a different genre colliding with this one (comedy, horror, heist, slice of life, political intrigue, cosmic)',
+    'a morally grey or outright villainous [[user]] with a sympathetic reason',
+    'an absurd but fully playable premise, played completely straight',
+    'a tiny, ordinary person who is in this scene for a ridiculous or heartbreaking small reason',
+];
+
+/**
+ * Ideas: persona concepts that fit a bot, for a fresh start with no chat yet.
+ * @param {object} p
+ * @param {'mix'|'fit'|'wild'} [p.mix] how many grounded vs unexpected ideas
+ * @param {string[]} [p.avoid] titles already shown, so a new batch does not repeat them
+ */
+export function buildIdeasPrompt({ lang, notes, charCard, mix = 'mix', avoid = [] }) {
+    const { fit, wild } = ideaSplit(mix);
+    const total = fit + wild;
     const parts = [];
     const cc = charBlock(charCard);
     if (cc) parts.push(cc);
     const n = String(notes ?? '').trim();
     if (n) parts.push(`AUTHOR'S NOTES (every idea must respect these):\n${maskMacros(n)}`);
+    const seen = avoid.map(t => String(t ?? '').trim()).filter(Boolean);
+    if (seen.length) parts.push(`ALREADY SUGGESTED (do not repeat these or close variations of them):\n${seen.map(t => `- ${maskMacros(t)}`).join('\n')}`);
+
+    const asks = [];
+    if (fit) asks.push(`${fit} FIT idea${fit > 1 ? 's' : ''}: grounded in the card and the opening scene, each with a clearly different dynamic with [[char]] (friction, tenderness, mystery, rivalry, dependence, protection…). Avoid the most obvious match.`);
+    if (wild) {
+        asks.push(`${wild} WILD idea${wild > 1 ? 's' : ''}: surprising, against the grain, ideas the player would never think of, yet still playable from the very first reply without breaking the facts of the opening scene. Each one takes a different angle; draw on these, or better:\n${WILD_ANGLES.map(a => `  * ${a}`).join('\n')}`);
+    }
+
     parts.push(
-        'The player is about to start a NEW story with [[char]] and has no persona yet. Propose exactly 3 persona concepts for [[user]] that fit [[char]] and the opening scene, each creating a clearly different dynamic with [[char]] (for example friction, tenderness, mystery, rivalry). Avoid the most obvious match.\n'
-        + 'Each idea: a short title, then 2-3 short lines: who [[user]] is and why they are in this scene; what they want from or hide from [[char]]; the dynamic it creates. At most 60 words per idea.\n\n'
-        + 'Output exactly this format and nothing else:\n@@IDEA | Title\n(2-3 lines)',
+        `The player is about to start a NEW story with [[char]] and has no persona yet. Propose exactly ${total} persona concepts for [[user]], all different from each other:\n${asks.join('\n')}\n\n`
+        + 'Each idea: a short, vivid title, then 2-3 short lines: who [[user]] is and why they are in this scene; what they want from or hide from [[char]]; the dynamic or the hook it creates. At most 45 words per idea.\n\n'
+        + 'Output exactly this format and nothing else, with fit or wild as the second field:\n@@IDEA | fit | Title\n(2-3 lines)\n@@IDEA | wild | Title\n(2-3 lines)',
     );
-    return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };
+    return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n'), count: total };
 }
 
 /** Condense: rewrite every filled block so the whole sheet fits the size budget. */
@@ -193,7 +221,7 @@ export function buildEvolvePrompt({ lang, size, name, sections, transcript }) {
         `RECENT STORY (oldest first):\n${maskMacros(transcript)}`,
         'Decide what the recent story has genuinely changed about [[user]]: beliefs, wounds, secrets now revealed, relationship with [[char]], new habits, new ways of speaking.\n'
         + 'Output ONLY the blocks that truly need to change, fully rewritten (not diffs), keeping every still-true fact. Do not rewrite a block for style alone. A changed block must not be longer than before: replace what is no longer true instead of adding to it. If nothing has changed, output only the SUMMARY block saying so.\n'
-        + 'Block names you may use: CORE, TENSION, VOICE, SAMPLES, ASYMMETRY, RULES. Block formats are the same as in the current sheet.\n'
+        + 'Block names you may use: CORE, LOOK, TENSION, VOICE, SAMPLES, ASYMMETRY, RULES. LOOK changes only for real reasons (a new scar, a disguise, cut hair). Block formats are the same as in the current sheet.\n'
         + `${budgetLine(size)}\n`
         + 'Finish with a SUMMARY block: one short line per changed block explaining what changed and which moment in the story caused it.\n\n'
         + 'Output format:\n<<TENSION>>\n(only if changed)\n<</TENSION>>\n<<SUMMARY>>\n(one line per change)\n<</SUMMARY>>',

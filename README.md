@@ -26,19 +26,20 @@ The persona is in the prompt on every turn, so Weaver writes to a budget:
 
 | Size | Budget | Conflicts | Samples | Knows | Rules |
 |---|---|---|---|---|---|
-| Lean (default) | ~250 tokens | 2 | 3 | 2 | 3 |
-| Standard | ~400 tokens | 3 | 4 | 3 | 4 |
-| Rich | ~650 tokens | 4 | 5 | 4 | 5 |
+| Lean (default) | ~280 tokens | 2 | 3 | 2 | 3 |
+| Standard | ~440 tokens | 3 | 4 | 3 | 4 |
+| Rich | ~700 tokens | 4 | 5 | 4 | 5 |
 
 The model is told the budget and per-block word limits, asked never to repeat a fact across blocks, and the line counts are cut to size on its output too. The token count at the bottom shows `used / budget`; when it is over, **Condense** (the compress button) rewrites the filled layers down to the budget in one request, keeping the facts. Evolve may replace what is no longer true but must not grow a layer.
 
 ## What it does
 
-**Weave.** Paste rough notes, press *Weave all layers*. You get six editable layers:
+**Weave.** Paste rough notes, press *Weave all layers*. You get seven editable layers:
 
 | Layer | What it holds |
 |---|---|
 | Core | Who they are, what they want now |
+| Appearance | What others see first, plus one detail they remember (a scar, a scent, a way of standing) |
 | Inner conflict | Contradictions written as pairs (wants X / needs Y, says A / means B) |
 | Voice | Rhythm, habits, what they never say |
 | Voice samples | Short lines of dialogue in different moods (angry, tender, deflecting…) |
@@ -47,7 +48,7 @@ The model is told the budget and per-block word limits, asked never to repeat a 
 
 Every layer has its own rewrite button. Text you already wrote in a layer is treated as your intent: kept and sharpened, not replaced. *Undo* steps back through the last ten AI changes.
 
-**Fresh start, no chat yet.** Weave never needs a chat. Pick the bot under *Build for this bot* (this chat's character, any other character, or none) and Weaver reads its card **and its opening message**, the one on screen if you swiped to another greeting, because that is usually where the bot decides who `{{user}}` is and why they are there. Notes can be empty: Weaver then invents someone who fits the scene. Or press *Suggest ideas from the bot* for three short concepts with different dynamics, put the one you like into your notes, and weave from that. Mine and Evolve are for later, once you have played a while.
+**Fresh start, no chat yet.** Weave never needs a chat. Pick the bot under *Build for this bot* (this chat's character, any other character, or none) and Weaver reads its card **and its opening message**, the one on screen if you swiped to another greeting, because that is usually where the bot decides who `{{user}}` is and why they are there. Notes can be empty: Weaver then invents someone who fits the scene. Or press *Suggest ideas from the bot*: six short concepts per batch, half grounded in the scene and half wild (not what the scene assumes, a forgotten link to the bot, a reversed power balance, a genre collision, an absurd premise played straight…). Choose *Mixed*, *Fit the scene* or *Wild and unexpected only*. *More ideas* adds another batch without repeating titles. Tap *Use this idea* on as many as you like to combine them in your notes, then weave. Mine and Evolve are for later, once you have played a while.
 
 **Mine from chat.** Reads your own messages in the current chat, measures how you actually write (median length, question and ellipsis habits, quoted speech, `*action*` markup), then builds Voice, Samples and Rules from your real lines. Impersonate then sounds like you.
 

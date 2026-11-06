@@ -4,7 +4,7 @@ import {
     SECTION_KEYS, emptySections, resolveLang, maskMacros, unmaskMacros, fixThaiNameSpacing,
     parseTagged, parseLore, splitKeys, assemblePersona, parsePersona, applyPatch, changedKeys,
     buildTranscript, styleStats, loreBookName, loreEntryFields, estimateTokens,
-    SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion, parseIdeas,
+    SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion, parseIdeas, mergeIdeas, ideaSplit, LABELS,
 } from '../core.js';
 import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt } from '../prompts.js';
 import { STRINGS, fmt, resolveUiLang } from '../i18n.js';
@@ -288,7 +288,7 @@ test('parseIdeas reads @@IDEA blocks, tolerates a missing bar and drops empty on
     const raw = 'Here:\n@@IDEA | The debtor\nOwes {{char}} money.\nHides it.\n@@IDEA Rival squire\nWants the same post.\n@@IDEA | Empty\n';
     const ideas = parseIdeas(raw);
     assert.equal(ideas.length, 2);
-    assert.deepEqual(ideas[0], { title: 'The debtor', text: 'Owes {{char}} money.\nHides it.' });
+    assert.deepEqual(ideas[0], { kind: 'fit', title: 'The debtor', text: 'Owes {{char}} money.\nHides it.' });
     assert.equal(ideas[1].title, 'Rival squire');
     assert.equal(parseIdeas('no ideas here').length, 0);
 });
@@ -307,6 +307,52 @@ test('fresh start: the opening scene is sent, empty notes ask the model to inven
     assert.ok(greetingOnly.prompt.includes('OPENING SCENE') && !greetingOnly.prompt.includes('OTHER CHARACTER'));
 
     const ideas = buildIdeasPrompt({ lang: 'th', notes: 'เป็นหมอ', charCard: card });
-    assert.ok(ideas.prompt.includes('@@IDEA') && ideas.prompt.includes('exactly 3') && ideas.prompt.includes('เป็นหมอ'));
+    assert.ok(ideas.prompt.includes('@@IDEA') && ideas.prompt.includes('exactly 6') && ideas.prompt.includes('เป็นหมอ'));
     assert.ok(!/\{\{\s*(user|char)\s*\}\}/i.test(ideas.prompt));
+});
+
+test('parseIdeas reads fit/wild kinds and keeps titles that contain a bar', () => {
+    const raw = '@@IDEA | wild | The drowned girl\nShe died last spring.\n@@IDEA | FIT | Squire\nWants the post.\n@@IDEA | Cat | Dog\nNot a kind tag.';
+    const ideas = parseIdeas(raw);
+    assert.deepEqual(ideas.map(i => i.kind), ['wild', 'fit', 'fit']);
+    assert.equal(ideas[0].title, 'The drowned girl');
+    assert.equal(ideas[2].title, 'Cat | Dog');
+});
+
+test('ideaSplit and mergeIdeas: mixes add up, new batches skip repeated titles', () => {
+    assert.deepEqual(ideaSplit('mix'), { fit: 3, wild: 3 });
+    assert.deepEqual(ideaSplit('fit'), { fit: 6, wild: 0 });
+    assert.deepEqual(ideaSplit('wild'), { fit: 0, wild: 6 });
+    const a = [{ title: 'One', kind: 'fit', text: 'x' }];
+    const merged = mergeIdeas(a, [{ title: ' one ', kind: 'wild', text: 'y' }, { title: 'Two', kind: 'wild', text: 'z' }]);
+    assert.deepEqual(merged.map(i => i.title), ['One', 'Two']);
+    const many = Array.from({ length: 30 }, (_, i) => ({ title: `T${i}`, kind: 'fit', text: 't' }));
+    assert.equal(mergeIdeas([], many).length, 24);
+});
+
+test('ideas prompt: wild-only asks only for wild ideas, avoid list is passed and masked', () => {
+    const card = { name: 'Iris', text: 'knight', greeting: 'hi' };
+    const wild = buildIdeasPrompt({ lang: 'en', charCard: card, mix: 'wild', avoid: ['Ghost of {{char}}'] });
+    assert.ok(wild.prompt.includes('6 WILD ideas') && !wild.prompt.includes('FIT idea'));
+    assert.ok(wild.prompt.includes('ALREADY SUGGESTED') && wild.prompt.includes('Ghost of [[char]]'));
+    assert.equal(wild.count, 6);
+    const fit = buildIdeasPrompt({ lang: 'en', charCard: card, mix: 'fit' });
+    assert.ok(fit.prompt.includes('6 FIT ideas') && !fit.prompt.includes('WILD idea'));
+});
+
+test('appearance layer: own label, spec sized per persona size, round-trips through the text', () => {
+    assert.equal(SECTION_KEYS[1], 'look');
+    assert.equal(LABELS.th.look, 'รูปลักษณ์');
+    for (const size of Object.keys(SIZES)) {
+        assert.ok(blockSpecs(size).look.includes(`at most ${SIZES[size].lookWords} words`), size);
+    }
+    const w = buildWeavePrompt({ lang: 'en', name: 'K', notes: 'n', sections: {} });
+    assert.ok(w.prompt.includes('<<LOOK>>'));
+    for (const lang of ['th', 'en']) {
+        const back = parsePersona(assemblePersona({ core: 'c', look: 'tall, scar on the lip' }, lang));
+        assert.equal(back.look, 'tall, scar on the lip');
+        assert.equal(back.core, 'c');
+    }
+    const e = buildEvolvePrompt({ lang: 'en', name: 'K', sections: { core: 'c' }, transcript: 'x' });
+    assert.ok(e.prompt.includes('LOOK'));
 });
