@@ -47,6 +47,8 @@ The model is told the budget and per-block word limits, asked never to repeat a 
 
 Every layer has its own rewrite button. Text you already wrote in a layer is treated as your intent: kept and sharpened, not replaced. *Undo* steps back through the last ten AI changes.
 
+**Fresh start, no chat yet.** Weave never needs a chat. Pick the bot under *Build for this bot* (this chat's character, any other character, or none) and Weaver reads its card **and its opening message**, the one on screen if you swiped to another greeting, because that is usually where the bot decides who `{{user}}` is and why they are there. Notes can be empty: Weaver then invents someone who fits the scene. Or press *Suggest ideas from the bot* for three short concepts with different dynamics, put the one you like into your notes, and weave from that. Mine and Evolve are for later, once you have played a while.
+
 **Mine from chat.** Reads your own messages in the current chat, measures how you actually write (median length, question and ellipsis habits, quoted speech, `*action*` markup), then builds Voice, Samples and Rules from your real lines. Impersonate then sounds like you.
 
 **Evolve.** After an arc, reads the recent story and proposes the smallest changes the persona needs. You see before and after for each changed layer and accept or skip each one.

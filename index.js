@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.2.0'; // keep in sync with manifest.json
+const VERSION = '0.3.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -52,6 +52,7 @@ const DEFAULTS = Object.freeze({
 /** Warn when the persona is this much over its size budget. */
 const BUDGET_SLACK = 1.15;
 const CHAR_CARD_CHARS = 1200;
+const GREETING_CHARS = 900;
 
 function settings() {
     extension_settings[MODULE] = Object.assign({}, DEFAULTS, extension_settings[MODULE]);
@@ -75,6 +76,8 @@ const state = {
     evolve: null,
     history: [],
     lastRaw: '',
+    charSel: null, // '' = no character, '@current' = this chat's character, else a character avatar
+    ideas: [],
     busy: false,
     sendingTo: '',
     lastCall: null,
@@ -115,16 +118,47 @@ function personaName() {
     return state.name.trim() || name1;
 }
 
+function charSel() {
+    if (state.charSel === null) state.charSel = settings().useCharCard ? '@current' : '';
+    return state.charSel;
+}
+
+/** The bot the persona is built for: this chat's character, one picked from the list, or none. */
+function targetChar() {
+    const sel = charSel();
+    if (!sel) return undefined;
+    if (sel === '@current') return characters?.[this_chid];
+    return (characters ?? []).find(c => c?.avatar === sel);
+}
+
 function currentCharName() {
-    return characters?.[this_chid]?.name ?? '';
+    return targetChar()?.name ?? '';
+}
+
+/**
+ * The opening scene. For this chat's character, the first message actually on screen
+ * (it reflects the greeting the player swiped to); otherwise the card's first message.
+ */
+function greetingFor(c) {
+    const cur = characters?.[this_chid];
+    if (c && cur && c.avatar === cur.avatar) {
+        const first = (Array.isArray(chat) ? chat : []).find(m => m && !m.is_system);
+        if (first && !first.is_user && String(first.mes ?? '').trim()) return first.mes;
+    }
+    return c?.first_mes ?? '';
 }
 
 function currentCharCard() {
-    if (!settings().useCharCard) return undefined;
-    const c = characters?.[this_chid];
+    const c = targetChar();
     if (!c) return undefined;
     const text = [c.description, c.personality, c.scenario].filter(Boolean).join('\n\n').slice(0, CHAR_CARD_CHARS);
-    return text ? { name: c.name, text } : undefined;
+    const greeting = String(greetingFor(c) ?? '').trim().slice(0, GREETING_CHARS);
+    return text || greeting ? { name: c.name, text, greeting } : undefined;
+}
+
+/** True when the chat has none of the player's own messages yet (a fresh start). */
+function isFreshChat() {
+    return !core.styleStats(chat);
 }
 
 function hasSections(sections = state.sections) {
@@ -245,7 +279,8 @@ function loadActive() {
 async function weave(keys) {
     await run(async () => {
         const t = ui();
-        if (!state.notes.trim() && !hasSections()) throw new Error(t.needNotes);
+        const charCard = currentCharCard();
+        if (!state.notes.trim() && !hasSections() && !charCard) throw new Error(t.needNotes);
         const size = sizeNow();
         const p = prompts.buildWeavePrompt({
             keys,
@@ -254,13 +289,34 @@ async function weave(keys) {
             name: personaName(),
             notes: state.notes,
             sections: state.sections,
-            charCard: currentCharCard(),
+            charCard,
         });
         const task = keys.length === 1 ? fmt(t.task_regen, { layer: t['sec_' + keys[0]] }) : t.task_weaveAll;
         const parsed = await askBlocks(p, keys, keys.length === 1 ? settings().otherTokens : settings().weaveTokens, task);
         pushHistory();
         for (const k of keys) if (parsed[k]) state.sections[k] = tidy(core.fitLayer(k, parsed[k], size));
     });
+}
+
+async function suggestIdeas() {
+    await run(async () => {
+        const t = ui();
+        const card = currentCharCard();
+        if (!card) throw new Error(t.ideasNeedChar);
+        const p = prompts.buildIdeasPrompt({ lang: concreteLang(), notes: state.notes, charCard: card });
+        const raw = await callModel(p, settings().otherTokens, fmt(t.task_ideas, { name: card.name }));
+        const ideas = core.parseIdeas(raw);
+        if (!ideas.length) throw new Error(t.errFormat);
+        state.ideas = ideas.map(i => ({ title: tidy(i.title), text: tidy(i.text) }));
+    });
+}
+
+function useIdea(i) {
+    const idea = state.ideas[i];
+    if (!idea) return;
+    const block = `${idea.title}\n${idea.text}`;
+    state.notes = state.notes.trim() ? `${state.notes.trim()}\n\n${block}` : block;
+    state.ideas = [];
 }
 
 async function condense() {
@@ -515,10 +571,43 @@ function loreEditor(entry, i, dis) {
 </div>`;
 }
 
+function charPicker(dis) {
+    const t = ui();
+    const sel = charSel();
+    const cur = characters?.[this_chid];
+    const opt = (v, label) => `<option value="${esc(v)}" ${sel === v ? 'selected' : ''}>${esc(label)}</option>`;
+    const others = (characters ?? [])
+        .filter(c => c?.avatar && c.avatar !== cur?.avatar)
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    // A picked character that no longer exists falls back to "none" in the list.
+    return `
+<label class="pw-label">${esc(t.charPick)}
+  <select class="text_pole" data-field="charSel" ${dis}>
+    ${opt('@current', cur ? fmt(t.charCurrent, { name: cur.name }) : t.charCurrentNone)}
+    ${opt('', t.charNone)}
+    ${others.map(c => opt(c.avatar, c.name)).join('')}
+  </select>
+</label>`;
+}
+
+function ideasBlock(dis) {
+    const t = ui();
+    const hasChar = Boolean(currentCharCard());
+    return `
+<div class="pw-row">
+  <button class="menu_button" data-act="ideas" ${dis} ${hasChar ? '' : 'disabled'} title="${esc(hasChar ? t.ideasRun : t.ideasNeedChar)}"><i class="fa-solid fa-lightbulb"></i> ${esc(t.ideasRun)}</button>
+</div>
+${state.ideas.map((idea, i) => `
+<div class="pw-idea">
+  <b>${esc(idea.title)}</b>
+  <div>${esc(idea.text).replace(/\n/g, '<br>')}</div>
+  <button class="menu_button pw-mini" data-act="useIdea:${i}" ${dis}><i class="fa-solid fa-arrow-down"></i> ${esc(t.ideasUse)}</button>
+</div>`).join('')}`;
+}
+
 function weaveBody(dis) {
     const t = ui();
     const active = hasActivePersona();
-    const charName = currentCharName();
     const lang = settings().lang;
     const langOption = (v, label) => `<option value="${v}" ${lang === v ? 'selected' : ''}>${esc(label)}</option>`;
 
@@ -532,12 +621,14 @@ ${state.target === 'new' ? `
   <input class="text_pole" data-field="name" value="${esc(state.name)}" placeholder="${esc(t.namePlaceholder)}">
 </label>
 <label class="pw-check"><input type="checkbox" data-field="selectAfter" ${state.selectAfter ? 'checked' : ''}> ${esc(t.selectAfter)}</label>` : ''}
+${charPicker(dis)}
+${isFreshChat() && state.target === 'new' ? `<div class="pw-hint pw-fresh">${esc(t.freshHint)}</div>` : ''}
 <label class="pw-label">${esc(t.notesLabel)} <small>${esc(t.notesHint)}</small>
   <textarea class="text_pole" rows="5" data-field="notes">${esc(state.notes)}</textarea>
 </label>
+${ideasBlock(dis)}
 <div class="pw-row">
   <button class="menu_button" data-act="loadActive" ${dis} ${active ? '' : 'disabled'}>${esc(t.loadActive)}</button>
-  <label class="pw-check"><input type="checkbox" data-field="useChar" ${settings().useCharCard ? 'checked' : ''}> ${esc(t.useChar)}${charName ? ` (${esc(charName)})` : ''}</label>
   <label class="pw-inline">${esc(t.langLabel)}
     <select class="text_pole" data-field="lang">${langOption('auto', t.langAuto)}${langOption('th', t.langTh)}${langOption('en', t.langEn)}</select>
   </label>
@@ -570,7 +661,7 @@ function mineBody(dis) {
 <div class="pw-row">${countField(dis)}
   <button class="menu_button pw-primary" data-act="mineRun" ${dis}><i class="fa-solid fa-magnifying-glass-chart"></i> ${esc(t.mineRun)}</button>
 </div>
-${stats ? `<pre class="pw-stats">${esc(core.formatStats(stats))}</pre>` : `<p class="pw-hint">${esc(t.mineNoChat)}</p>`}`;
+${stats ? `<pre class="pw-stats">${esc(core.formatStats(stats))}</pre>` : `<p class="pw-hint">${esc(t.mineNoChat)} ${esc(t.mineFresh)}</p>`}`;
 }
 
 function evolveBody(dis) {
@@ -815,12 +906,12 @@ async function checkForNewVersion(force = false) {
 }
 
 function stashDraft() {
-    const hasWork = state.notes.trim() || state.name.trim() || hasSections() || state.lore.length;
+    const hasWork = state.notes.trim() || state.name.trim() || hasSections() || state.lore.length || state.ideas.length;
     if (!hasWork) return;
     try {
         sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
             mode: state.mode, target: state.target, name: state.name, notes: state.notes,
-            sections: state.sections, loreOn: state.loreOn, lore: state.lore, open: Boolean(document.getElementById('pw_overlay')),
+            sections: state.sections, loreOn: state.loreOn, lore: state.lore, charSel: state.charSel, ideas: state.ideas, open: Boolean(document.getElementById('pw_overlay')),
         }));
     } catch { /* storage blocked: the draft is lost, the reload still works */ }
 }
@@ -839,6 +930,8 @@ function restoreDraft() {
     state.sections = { ...core.emptySections(), ...(draft.sections ?? {}) };
     state.loreOn = Boolean(draft.loreOn);
     state.lore = Array.isArray(draft.lore) ? draft.lore : [];
+    state.charSel = typeof draft.charSel === 'string' ? draft.charSel : null;
+    state.ideas = Array.isArray(draft.ideas) ? draft.ideas : [];
     return draft.open ? 'open' : true;
 }
 
@@ -871,6 +964,8 @@ function onClick(event) {
         case 'weaveAll': weave(SECTION_KEYS); return;
         case 'regen': weave([arg]); return;
         case 'loreGen': generateLore(); return;
+        case 'ideas': suggestIdeas(); return;
+        case 'useIdea': useIdea(Number(arg)); render(); return;
         case 'condense': condense(); return;
         case 'reloadNew': reloadWithFreshFiles(); return;
         case 'loreRemove': pushHistory(); state.lore.splice(Number(arg), 1); render(); return;
@@ -911,7 +1006,12 @@ function onChange(event) {
         state.target = el.value;
         if (state.target === 'active' && !state.notes.trim() && !hasSections()) loadActive();
     } else if (field === 'selectAfter') state.selectAfter = el.checked;
-    else if (field === 'useChar') { settings().useCharCard = el.checked; saveSettingsDebounced(); }
+    else if (field === 'charSel') {
+        state.charSel = el.value;
+        state.ideas = [];
+        settings().useCharCard = el.value !== '';
+        saveSettingsDebounced();
+    }
     else if (field === 'lang') { settings().lang = el.value; saveSettingsDebounced(); }
     else if (field === 'source') { settings().source = el.value; saveSettingsDebounced(); syncSettingsApi(); return; }
     else if (field === 'size') { settings().size = core.sizeKey(el.value); saveSettingsDebounced(); syncSettingsApi(); }
@@ -971,7 +1071,8 @@ function mountSettings() {
     <b>${esc(t.title)} <small class="pw-ver">v${VERSION}</small></b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
-  <div class="inline-drawer-content pw-settings">
+  <div class="inline-drawer-content">
+  <div class="pw-settings">
     <label>${esc(t.setUiLang)}
       <select id="pw_set_ui" class="text_pole">${opt(s.uiLang, 'auto', t.langAuto)}${opt(s.uiLang, 'th', t.langTh)}${opt(s.uiLang, 'en', t.langEn)}</select>
     </label>
@@ -993,6 +1094,7 @@ function mountSettings() {
       <div class="menu_button" id="pw_set_vcheck"><i class="fa-solid fa-magnifying-glass"></i> ${esc(t.verCheck)}</div>
       <div class="menu_button" id="pw_set_reload" title="${esc(t.verReloadHint)}"><i class="fa-solid fa-rotate"></i> ${esc(t.verReload)}</div>
     </div>
+  </div>
   </div>
 </div>`;
     host.appendChild(wrap);

@@ -4,9 +4,9 @@ import {
     SECTION_KEYS, emptySections, resolveLang, maskMacros, unmaskMacros, fixThaiNameSpacing,
     parseTagged, parseLore, splitKeys, assemblePersona, parsePersona, applyPatch, changedKeys,
     buildTranscript, styleStats, loreBookName, loreEntryFields, estimateTokens,
-    SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion,
+    SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion, parseIdeas,
 } from '../core.js';
-import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs } from '../prompts.js';
+import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt } from '../prompts.js';
 import { STRINGS, fmt, resolveUiLang } from '../i18n.js';
 
 test('i18n: every language has exactly the same keys, none empty, same placeholders', () => {
@@ -282,4 +282,31 @@ test('manifest and index.js agree on the version', async () => {
     for (const f of ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json']) {
         assert.ok(files.includes(`'${f}'`), `${f} missing from FILES`);
     }
+});
+
+test('parseIdeas reads @@IDEA blocks, tolerates a missing bar and drops empty ones', () => {
+    const raw = 'Here:\n@@IDEA | The debtor\nOwes {{char}} money.\nHides it.\n@@IDEA Rival squire\nWants the same post.\n@@IDEA | Empty\n';
+    const ideas = parseIdeas(raw);
+    assert.equal(ideas.length, 2);
+    assert.deepEqual(ideas[0], { title: 'The debtor', text: 'Owes {{char}} money.\nHides it.' });
+    assert.equal(ideas[1].title, 'Rival squire');
+    assert.equal(parseIdeas('no ideas here').length, 0);
+});
+
+test('fresh start: the opening scene is sent, empty notes ask the model to invent a fitting persona', () => {
+    const card = { name: 'Iris', text: '{{char}} is a knight.', greeting: '{{char}} drags {{user}} out of the river.' };
+    const w = buildWeavePrompt({ lang: 'en', size: 'lean', name: 'Kai', notes: '', sections: {}, charCard: card });
+    assert.ok(w.prompt.includes('OPENING SCENE') && w.prompt.includes('[[char]] drags [[user]] out of the river.'));
+    assert.ok(w.prompt.includes('Invent [[user]] to fit [[char]]'));
+    assert.ok(!/\{\{\s*(user|char)\s*\}\}/i.test(w.prompt));
+    const withNotes = buildWeavePrompt({ lang: 'en', name: 'Kai', notes: 'a thief', sections: {}, charCard: card });
+    assert.ok(withNotes.prompt.includes('a thief') && !withNotes.prompt.includes('Invent [[user]]'));
+    const noCard = buildWeavePrompt({ lang: 'en', name: 'Kai', notes: '', sections: {} });
+    assert.ok(noCard.prompt.includes('(none)') && !noCard.prompt.includes('OPENING SCENE'));
+    const greetingOnly = buildWeavePrompt({ lang: 'en', name: 'Kai', notes: '', sections: {}, charCard: { name: 'X', text: '', greeting: 'hi' } });
+    assert.ok(greetingOnly.prompt.includes('OPENING SCENE') && !greetingOnly.prompt.includes('OTHER CHARACTER'));
+
+    const ideas = buildIdeasPrompt({ lang: 'th', notes: 'เป็นหมอ', charCard: card });
+    assert.ok(ideas.prompt.includes('@@IDEA') && ideas.prompt.includes('exactly 3') && ideas.prompt.includes('เป็นหมอ'));
+    assert.ok(!/\{\{\s*(user|char)\s*\}\}/i.test(ideas.prompt));
 });

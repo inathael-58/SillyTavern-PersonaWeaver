@@ -209,6 +209,27 @@ export function parseLore(raw) {
         .filter(e => e.content && e.keys.length);
 }
 
+/** Parse `@@IDEA | Title` followed by a few lines of pitch. */
+export function parseIdeas(raw) {
+    const text = stripFences(raw).replace(/\r\n/g, '\n');
+    const ideas = [];
+    let current = null;
+    for (const line of text.split('\n')) {
+        const m = line.match(/^\s*@@IDEA\s*\|?\s*(.*?)\s*$/i);
+        if (m) {
+            if (current) ideas.push(current);
+            current = { title: m[1].replace(/\|\s*$/, '').trim(), lines: [] };
+            continue;
+        }
+        if (current) current.lines.push(line);
+    }
+    if (current) ideas.push(current);
+    return ideas
+        .map(i => ({ title: i.title || 'Idea', text: i.lines.join('\n').trim() }))
+        .filter(i => i.text)
+        .slice(0, 5);
+}
+
 // ---------------------------------------------------------------------------
 // Persona text <-> sections
 // ---------------------------------------------------------------------------

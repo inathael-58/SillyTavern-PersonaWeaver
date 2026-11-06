@@ -75,8 +75,23 @@ function draftText(sections, lang) {
 }
 
 function charBlock(charCard) {
-    if (!charCard?.text) return '';
-    return `OTHER CHARACTER ([[char]]) — ${maskMacros(charCard.name)}:\n${maskMacros(charCard.text)}`;
+    if (!charCard?.text && !charCard?.greeting) return '';
+    const parts = [];
+    if (charCard.text) parts.push(`OTHER CHARACTER ([[char]]) — ${maskMacros(charCard.name)}:\n${maskMacros(charCard.text)}`);
+    if (charCard.greeting) {
+        parts.push(`OPENING SCENE (the first message of the story; it often sets who [[user]] is, where they are and why they are with [[char]]; the persona must fit it and must not contradict it):\n${maskMacros(charCard.greeting)}`);
+    }
+    return parts.join('\n\n');
+}
+
+/** What to tell the model when the author wrote no notes. */
+function notesText(notes, charCard) {
+    const n = String(notes ?? '').trim();
+    if (n) return maskMacros(n);
+    if (charCard?.text || charCard?.greeting) {
+        return '(none. Invent [[user]] to fit [[char]] and the opening scene: someone with a reason to be there, a want that rubs against [[char]], and a secret worth discovering. Prefer the specific and slightly unexpected over the obvious match.)';
+    }
+    return '(none)';
 }
 
 /**
@@ -98,7 +113,7 @@ export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes,
 
     const parts = [
         `PERSONA NAME: ${maskMacros(name || '(unnamed)')}`,
-        `AUTHOR'S ROUGH NOTES (keep their facts; do not contradict):\n${maskMacros(notes || '(none)')}`,
+        `AUTHOR'S ROUGH NOTES (keep their facts; do not contradict):\n${notesText(notes, charCard)}`,
     ];
     if (draft) parts.push(`CURRENT DRAFT (where it already covers a block you write, treat it as the author's intent: keep its facts, raise its craft, do not make it longer):\n${maskMacros(draft)}`);
     const cc = charBlock(charCard);
@@ -112,6 +127,21 @@ export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes,
         + `Output exactly this format and nothing else:\n${blockFormat(keys)}`,
     );
 
+    return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };
+}
+
+/** Ideas: a few short persona concepts that fit a bot, for a fresh start with no chat yet. */
+export function buildIdeasPrompt({ lang, notes, charCard }) {
+    const parts = [];
+    const cc = charBlock(charCard);
+    if (cc) parts.push(cc);
+    const n = String(notes ?? '').trim();
+    if (n) parts.push(`AUTHOR'S NOTES (every idea must respect these):\n${maskMacros(n)}`);
+    parts.push(
+        'The player is about to start a NEW story with [[char]] and has no persona yet. Propose exactly 3 persona concepts for [[user]] that fit [[char]] and the opening scene, each creating a clearly different dynamic with [[char]] (for example friction, tenderness, mystery, rivalry). Avoid the most obvious match.\n'
+        + 'Each idea: a short title, then 2-3 short lines: who [[user]] is and why they are in this scene; what they want from or hide from [[char]]; the dynamic it creates. At most 60 words per idea.\n\n'
+        + 'Output exactly this format and nothing else:\n@@IDEA | Title\n(2-3 lines)',
+    );
     return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };
 }
 
