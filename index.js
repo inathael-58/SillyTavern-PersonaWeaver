@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.4.0'; // keep in sync with manifest.json
+const VERSION = '0.5.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -79,6 +79,10 @@ const state = {
     lastRaw: '',
     charSel: null, // '' = no character, '@current' = this chat's character, else a character avatar
     ideas: [],
+    premise: '', // the chosen idea(s): the foundation every prompt builds on
+    gender: '', // '' | 'female' | 'male' | 'nonbinary'
+    pronouns: '', // optional free text, e.g. "she/her" or "ข้า/เจ้า"
+
     busy: false,
     sendingTo: '',
     lastCall: null,
@@ -162,6 +166,11 @@ function isFreshChat() {
     return !core.styleStats(chat);
 }
 
+/** Premise, gender and pronouns, passed to every prompt builder. */
+function identity() {
+    return { premise: state.premise, gender: state.gender, pronouns: state.pronouns };
+}
+
 function hasSections(sections = state.sections) {
     return SECTION_KEYS.some(k => String(sections[k] ?? '').trim());
 }
@@ -169,7 +178,7 @@ function hasSections(sections = state.sections) {
 function concreteLang() {
     const setting = settings().lang;
     if (setting === 'th' || setting === 'en') return setting;
-    const sample = `${state.notes}\n${SECTION_KEYS.map(k => state.sections[k]).join('\n')}`;
+    const sample = `${state.premise}\n${state.notes}\n${SECTION_KEYS.map(k => state.sections[k]).join('\n')}`;
     if (!sample.trim()) return resolveUiLang(settings().uiLang, getCurrentLocale());
     return core.resolveLang('auto', sample);
 }
@@ -281,7 +290,7 @@ async function weave(keys) {
     await run(async () => {
         const t = ui();
         const charCard = currentCharCard();
-        if (!state.notes.trim() && !hasSections() && !charCard) throw new Error(t.needNotes);
+        if (!state.notes.trim() && !state.premise.trim() && !hasSections() && !charCard) throw new Error(t.needNotes);
         const size = sizeNow();
         const p = prompts.buildWeavePrompt({
             keys,
@@ -291,6 +300,7 @@ async function weave(keys) {
             notes: state.notes,
             sections: state.sections,
             charCard,
+            ...identity(),
         });
         const task = keys.length === 1 ? fmt(t.task_regen, { layer: t['sec_' + keys[0]] }) : t.task_weaveAll;
         const parsed = await askBlocks(p, keys, keys.length === 1 ? settings().otherTokens : settings().weaveTokens, task);
@@ -310,7 +320,7 @@ async function suggestIdeas(more = false) {
         const card = currentCharCard();
         if (!card) throw new Error(t.ideasNeedChar);
         const avoid = more ? state.ideas.map(i => i.title) : [];
-        const p = prompts.buildIdeasPrompt({ lang: concreteLang(), notes: state.notes, charCard: card, mix: ideaMix(), avoid });
+        const p = prompts.buildIdeasPrompt({ lang: concreteLang(), notes: state.notes, charCard: card, mix: ideaMix(), avoid, gender: state.gender, pronouns: state.pronouns });
         const task = fmt(more ? t.task_ideasMore : t.task_ideas, { name: card.name, n: p.count, kind: t['ideaMix_' + ideaMix()] });
         const raw = await callModel(p, settings().weaveTokens, task);
         const batch = core.parseIdeas(raw).map(i => ({ kind: i.kind, title: tidy(i.title), text: tidy(i.text), used: false }));
@@ -319,12 +329,15 @@ async function suggestIdeas(more = false) {
     });
 }
 
-/** Put an idea into the notes. The list stays, so ideas can be combined. */
+/**
+ * Make an idea the premise (or add it to the premise). The premise is sent to every prompt
+ * as the foundation, ahead of notes and older layers. The list stays, so ideas can be combined.
+ */
 function useIdea(i) {
     const idea = state.ideas[i];
     if (!idea || idea.used) return;
     const block = `${idea.title}\n${idea.text}`;
-    state.notes = state.notes.trim() ? `${state.notes.trim()}\n\n${block}` : block;
+    state.premise = state.premise.trim() ? `${state.premise.trim()}\n\n${block}` : block;
     idea.used = true;
 }
 
@@ -338,7 +351,7 @@ async function condense() {
             toastr.info(t.condenseNothing, t.title);
             return;
         }
-        const p = prompts.buildCondensePrompt({ lang: concreteLang(), size, name: personaName(), sections: state.sections });
+        const p = prompts.buildCondensePrompt({ lang: concreteLang(), size, name: personaName(), sections: state.sections, ...identity() });
         const task = fmt(t.task_condense, { size: t['sizeShort_' + size] });
         const parsed = await askBlocks(p, p.keys, settings().weaveTokens, task);
         pushHistory();
@@ -349,7 +362,7 @@ async function condense() {
 async function generateLore() {
     await run(async () => {
         const t = ui();
-        if (!state.notes.trim() && !hasSections()) throw new Error(t.needNotes);
+        if (!state.notes.trim() && !state.premise.trim() && !hasSections()) throw new Error(t.needNotes);
         const p = prompts.buildLorePrompt({
             lang: concreteLang(),
             size: sizeNow(),
@@ -357,6 +370,7 @@ async function generateLore() {
             notes: state.notes,
             sections: state.sections,
             charCard: currentCharCard(),
+            ...identity(),
         });
         const raw = await callModel(p, settings().otherTokens, t.task_lore);
         const entries = core.parseLore(raw);
@@ -388,6 +402,8 @@ async function mine() {
             transcript,
             stats,
             sections: state.sections,
+            gender: state.gender,
+            pronouns: state.pronouns,
         });
         const keys = ['voice', 'samples', 'rules'];
         const parsed = await askBlocks(p, keys, settings().otherTokens, fmt(t.task_mine, { n: stats.count }));
@@ -416,7 +432,7 @@ async function evolve() {
         if (!transcript) throw new Error(t.mineNoChat);
 
         const size = sizeNow();
-        const p = prompts.buildEvolvePrompt({ lang: concreteLang(), size, name: personaName(), sections: base, transcript });
+        const p = prompts.buildEvolvePrompt({ lang: concreteLang(), size, name: personaName(), sections: base, transcript, gender: state.gender, pronouns: state.pronouns });
         const raw = await callModel(p, settings().otherTokens, t.task_evolve);
         const parsed = core.parseTagged(raw, [...SECTION_KEYS, 'summary']);
         if (!SECTION_KEYS.some(k => parsed[k]) && !parsed.summary) throw new Error(t.errFormat);
@@ -630,6 +646,32 @@ ${state.ideas.length ? `<div class="pw-ideas">${cards}</div>
 </div>` : ''}`;
 }
 
+function genderRow(dis) {
+    const t = ui();
+    const opts = ['', 'female', 'male', 'nonbinary']
+        .map(g => `<option value="${g}" ${state.gender === g ? 'selected' : ''}>${esc(t['gender_' + (g || 'unset')])}</option>`)
+        .join('');
+    return `
+<div class="pw-row pw-gender">
+  <label class="pw-inline">${esc(t.genderLabel)}
+    <select class="text_pole" data-field="gender" ${dis}>${opts}</select>
+  </label>
+  <label class="pw-inline pw-grow">${esc(t.pronounsLabel)}
+    <input class="text_pole" data-field="pronouns" value="${esc(state.pronouns)}" placeholder="${esc(t.pronounsPlaceholder)}" ${dis}>
+  </label>
+</div>`;
+}
+
+function premiseBlock(dis) {
+    const t = ui();
+    if (!state.premise.trim() && !state.ideas.some(i => i.used)) return '';
+    return `
+<label class="pw-label pw-premise">${esc(t.premiseLabel)} <small>${esc(t.premiseHint)}</small>
+  <textarea class="text_pole" rows="4" data-field="premise">${esc(state.premise)}</textarea>
+</label>
+<div class="pw-row"><button class="menu_button pw-mini" data-act="premiseClear" ${dis}><i class="fa-solid fa-xmark"></i> ${esc(t.premiseClear)}</button></div>`;
+}
+
 function weaveBody(dis) {
     const t = ui();
     const active = hasActivePersona();
@@ -646,12 +688,14 @@ ${state.target === 'new' ? `
   <input class="text_pole" data-field="name" value="${esc(state.name)}" placeholder="${esc(t.namePlaceholder)}">
 </label>
 <label class="pw-check"><input type="checkbox" data-field="selectAfter" ${state.selectAfter ? 'checked' : ''}> ${esc(t.selectAfter)}</label>` : ''}
+${genderRow(dis)}
 ${charPicker(dis)}
 ${isFreshChat() && state.target === 'new' ? `<div class="pw-hint pw-fresh">${esc(t.freshHint)}</div>` : ''}
 <label class="pw-label">${esc(t.notesLabel)} <small>${esc(t.notesHint)}</small>
   <textarea class="text_pole" rows="5" data-field="notes">${esc(state.notes)}</textarea>
 </label>
 ${ideasBlock(dis)}
+${premiseBlock(dis)}
 <div class="pw-row">
   <button class="menu_button" data-act="loadActive" ${dis} ${active ? '' : 'disabled'}>${esc(t.loadActive)}</button>
   <label class="pw-inline">${esc(t.langLabel)}
@@ -931,11 +975,12 @@ async function checkForNewVersion(force = false) {
 }
 
 function stashDraft() {
-    const hasWork = state.notes.trim() || state.name.trim() || hasSections() || state.lore.length || state.ideas.length;
+    const hasWork = state.notes.trim() || state.premise.trim() || state.name.trim() || hasSections() || state.lore.length || state.ideas.length;
     if (!hasWork) return;
     try {
         sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
             mode: state.mode, target: state.target, name: state.name, notes: state.notes,
+            premise: state.premise, gender: state.gender, pronouns: state.pronouns,
             sections: state.sections, loreOn: state.loreOn, lore: state.lore, charSel: state.charSel, ideas: state.ideas, open: Boolean(document.getElementById('pw_overlay')),
         }));
     } catch { /* storage blocked: the draft is lost, the reload still works */ }
@@ -952,6 +997,9 @@ function restoreDraft() {
     state.target = draft.target === 'active' ? 'active' : 'new';
     state.name = String(draft.name ?? '');
     state.notes = String(draft.notes ?? '');
+    state.premise = String(draft.premise ?? '');
+    state.gender = ['female', 'male', 'nonbinary'].includes(draft.gender) ? draft.gender : '';
+    state.pronouns = String(draft.pronouns ?? '');
     state.sections = { ...core.emptySections(), ...(draft.sections ?? {}) };
     state.loreOn = Boolean(draft.loreOn);
     state.lore = Array.isArray(draft.lore) ? draft.lore : [];
@@ -992,6 +1040,11 @@ function onClick(event) {
         case 'ideas': suggestIdeas(false); return;
         case 'ideasMore': suggestIdeas(true); return;
         case 'ideasClear': state.ideas = []; render(); return;
+        case 'premiseClear':
+            state.premise = '';
+            state.ideas.forEach((idea) => { idea.used = false; });
+            render();
+            return;
         case 'useIdea': useIdea(Number(arg)); render(); return;
         case 'condense': condense(); return;
         case 'reloadNew': reloadWithFreshFiles(); return;
@@ -1013,6 +1066,8 @@ function onInput(event) {
 
     if (field === 'name') state.name = el.value;
     else if (field === 'notes') state.notes = el.value;
+    else if (field === 'premise') state.premise = el.value;
+    else if (field === 'pronouns') state.pronouns = el.value;
     else if (field === 'msgCount') state.msgCount = Math.max(5, Math.min(200, Number(el.value) || DEFAULTS.messages));
     else if (field.startsWith('sec:')) state.sections[field.slice(4)] = el.value;
     else if (field.startsWith('lore:')) {
@@ -1033,6 +1088,7 @@ function onChange(event) {
         state.target = el.value;
         if (state.target === 'active' && !state.notes.trim() && !hasSections()) loadActive();
     } else if (field === 'selectAfter') state.selectAfter = el.checked;
+    else if (field === 'gender') { state.gender = ['female', 'male', 'nonbinary'].includes(el.value) ? el.value : ''; return; }
     else if (field === 'ideaMix') { settings().ideaMix = core.IDEA_MIXES.includes(el.value) ? el.value : 'mix'; saveSettingsDebounced(); return; }
     else if (field === 'charSel') {
         state.charSel = el.value;

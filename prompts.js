@@ -75,20 +75,58 @@ function draftText(sections, lang) {
     return lines.join('\n\n');
 }
 
-function charBlock(charCard) {
+function charBlock(charCard, premise) {
     if (!charCard?.text && !charCard?.greeting) return '';
     const parts = [];
     if (charCard.text) parts.push(`OTHER CHARACTER ([[char]]) — ${maskMacros(charCard.name)}:\n${maskMacros(charCard.text)}`);
     if (charCard.greeting) {
-        parts.push(`OPENING SCENE (the first message of the story; it often sets who [[user]] is, where they are and why they are with [[char]]; the persona must fit it and must not contradict it):\n${maskMacros(charCard.greeting)}`);
+        const rule = String(premise ?? '').trim()
+            ? 'keep its hard facts (place, moment, who is present, what just happened); the PREMISE decides who [[user]] really is in it'
+            : 'it often sets who [[user]] is, where they are and why they are with [[char]]; the persona must fit it and must not contradict it';
+        parts.push(`OPENING SCENE (the first message of the story; ${rule}):\n${maskMacros(charCard.greeting)}`);
     }
     return parts.join('\n\n');
 }
 
+export const GENDERS = ['', 'female', 'male', 'nonbinary'];
+
+/**
+ * Gender and pronouns of [[user]]. Thai needs more than she/he: narration pronoun,
+ * first-person pronouns and polite particles all follow gender.
+ */
+export function genderRule(gender, pronouns, lang) {
+    const custom = String(pronouns ?? '').trim();
+    const lines = [];
+    if (gender === 'female') {
+        lines.push('[[user]] is FEMALE. Refer to [[user]] as she/her.');
+        if (lang !== 'en') lines.push('In Thai: narration calls her เธอ (never เขา or a male word); in her own dialogue she uses a feminine first-person pronoun that fits her background and era (ฉัน, ดิฉัน, ข้า, หนู…) and, when polite, ค่ะ/คะ or a period-fitting equivalent, never ครับ.');
+    } else if (gender === 'male') {
+        lines.push('[[user]] is MALE. Refer to [[user]] as he/him.');
+        if (lang !== 'en') lines.push('In Thai: narration calls him เขา; in his own dialogue he uses a masculine first-person pronoun that fits his background and era (ผม, ข้า, กระผม, ฉัน…) and, when polite, ครับ or a period-fitting equivalent (ขอรับ), never ค่ะ.');
+    } else if (gender === 'nonbinary') {
+        lines.push('[[user]] is NON-BINARY. Refer to [[user]] as they/them.');
+        if (lang !== 'en') lines.push('In Thai: narration uses the name or a neutral เขา; in their own dialogue they use เรา or ฉัน and avoid gendered polite particles (ค่ะ/ครับ) unless the notes say otherwise.');
+    }
+    if (custom) lines.push(`Use exactly these pronouns for [[user]]: ${maskMacros(custom)}.`);
+    return lines.join(' ');
+}
+
+function identityBlock(gender, pronouns, lang) {
+    const rule = genderRule(gender, pronouns, lang);
+    return rule ? `GENDER AND PRONOUNS (fixed, apply everywhere, including dialogue samples):\n${rule}` : '';
+}
+
+function premiseBlock(premise) {
+    const p = String(premise ?? '').trim();
+    if (!p) return '';
+    return `PREMISE (the concept the author chose for [[user]]; it is the FOUNDATION of the persona. Every block must express it, not just mention it. Where the current draft, the notes or the obvious reading of the card disagree with it, the premise wins. From the opening scene keep only its hard facts (place, moment, who is present) and reinterpret [[user]]'s place in it through the premise):\n${maskMacros(p)}`;
+}
+
 /** What to tell the model when the author wrote no notes. */
-function notesText(notes, charCard) {
+function notesText(notes, charCard, premise) {
     const n = String(notes ?? '').trim();
     if (n) return maskMacros(n);
+    if (String(premise ?? '').trim()) return '(none beyond the premise)';
     if (charCard?.text || charCard?.greeting) {
         return '(none. Invent [[user]] to fit [[char]] and the opening scene: someone with a reason to be there, a want that rubs against [[char]], and a secret worth discovering. Prefer the specific and slightly unexpected over the obvious match.)';
     }
@@ -107,24 +145,32 @@ function notesText(notes, charCard) {
  * @param {{name:string,text:string}} [p.charCard]
  * @param {string} [p.styleNotes] extra evidence, e.g. style statistics
  */
-export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes, sections, charCard, styleNotes }) {
+export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes, sections, charCard, styleNotes, premise, gender, pronouns }) {
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const partial = keys.length < SECTION_KEYS.length;
     const specs = blockSpecs(size);
+    const hasPremise = Boolean(String(premise ?? '').trim());
 
-    const parts = [
-        `PERSONA NAME: ${maskMacros(name || '(unnamed)')}`,
-        `AUTHOR'S ROUGH NOTES (keep their facts; do not contradict):\n${notesText(notes, charCard)}`,
-    ];
-    if (draft) parts.push(`CURRENT DRAFT (where it already covers a block you write, treat it as the author's intent: keep its facts, raise its craft, do not make it longer):\n${maskMacros(draft)}`);
-    const cc = charBlock(charCard);
+    const parts = [`PERSONA NAME: ${maskMacros(name || '(unnamed)')}`];
+    const id = identityBlock(gender, pronouns, lang);
+    if (id) parts.push(id);
+    if (hasPremise) parts.push(premiseBlock(premise));
+    parts.push(`AUTHOR'S ROUGH NOTES (keep their facts; do not contradict):\n${notesText(notes, charCard, premise)}`);
+    if (draft) {
+        parts.push(hasPremise
+            ? `CURRENT DRAFT (keep what fits the PREMISE and raise its craft; anything that contradicts or ignores the premise is outdated: rewrite it to follow the premise. Do not make it longer):\n${maskMacros(draft)}`
+            : `CURRENT DRAFT (where it already covers a block you write, treat it as the author's intent: keep its facts, raise its craft, do not make it longer):\n${maskMacros(draft)}`);
+    }
+    const cc = charBlock(charCard, premise);
     if (cc) parts.push(cc);
     if (styleNotes) parts.push(`EVIDENCE ABOUT HOW THE PLAYER ACTUALLY WRITES:\n${maskMacros(styleNotes)}`);
 
     parts.push(
         `${partial ? 'Write ONLY these blocks, consistent with the rest of the draft and without repeating it.' : 'Write all of these blocks.'}\n\n`
-        + `${keys.map(k => specs[k]).join('\n')}\n\n`
-        + `${budgetLine(size)}\n\n`
+        + `${keys.map(k => specs[k]).join('\n')}\n`
+        + `${keys.includes('core') && (gender || String(pronouns ?? '').trim()) ? 'CORE opens with [[user]]\'s gender and pronouns in a few words, so any AI reading the sheet uses them (e.g. "Woman, she/her." or "หญิง (เธอ)").\n' : ''}`
+        + `${hasPremise ? 'Check before answering: every block you write must clearly come from the PREMISE.\n' : ''}`
+        + `\n${budgetLine(size)}\n\n`
         + `Output exactly this format and nothing else:\n${blockFormat(keys)}`,
     );
 
@@ -148,10 +194,12 @@ const WILD_ANGLES = [
  * @param {'mix'|'fit'|'wild'} [p.mix] how many grounded vs unexpected ideas
  * @param {string[]} [p.avoid] titles already shown, so a new batch does not repeat them
  */
-export function buildIdeasPrompt({ lang, notes, charCard, mix = 'mix', avoid = [] }) {
+export function buildIdeasPrompt({ lang, notes, charCard, mix = 'mix', avoid = [], gender, pronouns }) {
     const { fit, wild } = ideaSplit(mix);
     const total = fit + wild;
     const parts = [];
+    const id = identityBlock(gender, pronouns, lang);
+    if (id) parts.push(`${id}\nEvery idea keeps this gender, even when [[user]] is not human.`);
     const cc = charBlock(charCard);
     if (cc) parts.push(cc);
     const n = String(notes ?? '').trim();
@@ -174,29 +222,32 @@ export function buildIdeasPrompt({ lang, notes, charCard, mix = 'mix', avoid = [
 }
 
 /** Condense: rewrite every filled block so the whole sheet fits the size budget. */
-export function buildCondensePrompt({ lang, size, name, sections }) {
+export function buildCondensePrompt({ lang, size, name, sections, premise, gender, pronouns }) {
     const keys = SECTION_KEYS.filter(k => String(sections?.[k] ?? '').trim());
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const specs = blockSpecs(size);
     const prompt = [
         `PERSONA NAME: ${maskMacros(name || '(unnamed)')}`,
+        identityBlock(gender, pronouns, lang),
+        String(premise ?? '').trim() ? `PREMISE (keep it intact while cutting):\n${maskMacros(premise)}` : '',
         `CURRENT PERSONA SHEET (too long):\n${maskMacros(draft)}`,
         'Rewrite every block below so the sheet becomes much shorter. Keep every fact that changes how [[user]] acts or speaks; merge duplicates across blocks; drop flourish, filler and anything generic. Keep the author\'s strongest exact lines in SAMPLES. Do not add anything new.\n\n'
         + `${keys.map(k => specs[k]).join('\n')}\n\n`
         + `${budgetLine(size)}\n\n`
         + `Output exactly this format and nothing else:\n${blockFormat(keys)}`,
-    ].join('\n\n');
+    ].filter(Boolean).join('\n\n');
     return { systemPrompt: systemFor(lang), prompt, keys };
 }
 
 /** Mine: derive voice, samples and writing rules from the player's real messages. */
-export function buildMinePrompt({ lang, size, name, transcript, stats, sections }) {
+export function buildMinePrompt({ lang, size, name, transcript, stats, sections, gender, pronouns }) {
     const keys = ['voice', 'samples', 'rules'];
     const specs = blockSpecs(size);
     const n = sizeSpec(size).lines.samples;
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const parts = [
         `PERSONA NAME: ${maskMacros(name || '(unnamed)')}`,
+        identityBlock(gender, pronouns, lang),
         `STATISTICS (computed from the player's messages, treat as fact):\n${formatStats(stats)}`,
         `THE PLAYER'S OWN MESSAGES, oldest first:\n${maskMacros(transcript)}`,
     ];
@@ -209,14 +260,15 @@ export function buildMinePrompt({ lang, size, name, transcript, stats, sections 
         + `${budgetLine(size)}\n\n`
         + `Output exactly this format and nothing else:\n${blockFormat(keys)}`,
     );
-    return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };
+    return { systemPrompt: systemFor(lang), prompt: parts.filter(Boolean).join('\n\n') };
 }
 
 /** Evolve: propose a minimal patch after the story has moved on. */
-export function buildEvolvePrompt({ lang, size, name, sections, transcript }) {
+export function buildEvolvePrompt({ lang, size, name, sections, transcript, gender, pronouns }) {
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const prompt = [
         `PERSONA NAME: ${maskMacros(name || '(unnamed)')}`,
+        identityBlock(gender, pronouns, lang),
         `CURRENT PERSONA SHEET:\n${maskMacros(draft)}`,
         `RECENT STORY (oldest first):\n${maskMacros(transcript)}`,
         'Decide what the recent story has genuinely changed about [[user]]: beliefs, wounds, secrets now revealed, relationship with [[char]], new habits, new ways of speaking.\n'
@@ -225,24 +277,29 @@ export function buildEvolvePrompt({ lang, size, name, sections, transcript }) {
         + `${budgetLine(size)}\n`
         + 'Finish with a SUMMARY block: one short line per changed block explaining what changed and which moment in the story caused it.\n\n'
         + 'Output format:\n<<TENSION>>\n(only if changed)\n<</TENSION>>\n<<SUMMARY>>\n(one line per change)\n<</SUMMARY>>',
-    ].join('\n\n');
+    ].filter(Boolean).join('\n\n');
     return { systemPrompt: systemFor(lang), prompt };
 }
 
 /** Lore: move backstory and secrets out of the always-on persona into keyword-triggered entries. */
-export function buildLorePrompt({ lang, size, name, notes, sections, charCard }) {
+export function buildLorePrompt({ lang, size, name, notes, sections, charCard, premise, gender, pronouns }) {
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const words = { lean: '30-70', standard: '40-90', rich: '50-120' }[size] ?? '30-70';
-    const parts = [
-        `PERSONA NAME: ${maskMacros(name || '(unnamed)')}`,
-        `AUTHOR'S ROUGH NOTES:\n${maskMacros(notes || '(none)')}`,
-    ];
-    if (draft) parts.push(`CURRENT PERSONA SHEET (always in the prompt, so do not repeat its content):\n${maskMacros(draft)}`);
-    const cc = charBlock(charCard);
-    if (cc) parts.push(cc);
+    const hasPremise = Boolean(String(premise ?? '').trim());
+    const parts = [`PERSONA NAME: ${maskMacros(name || '(unnamed)')}`];
+    const id = identityBlock(gender, pronouns, lang);
+    if (id) parts.push(id);
+    if (hasPremise) parts.push(premiseBlock(premise));
+    parts.push(`AUTHOR'S ROUGH NOTES:\n${notesText(notes, null, premise)}`);
+    if (draft) parts.push(`CURRENT PERSONA SHEET (always in the prompt, so do not repeat its content, but every entry must agree with it${hasPremise ? ' and with the PREMISE; if they disagree, the premise wins' : ''}):\n${maskMacros(draft)}`);
+    const cc = charBlock(charCard, premise);
+    if (cc) parts.push(`${cc}\n(Background only: use it to place [[user]] in [[char]]'s world, never as the subject of an entry.)`);
     parts.push(
-        'Create 3-6 lorebook entries for material about [[user]] that should NOT sit in the always-on sheet: backstory episodes, secrets, relationships with side characters, places, objects, old wounds. They surface only when the chat mentions them.\n'
-        + `Each entry: a short title; 2-5 trigger keys (words or phrases likely to appear in the chat when this matters, in the chat's language, include name variants); ${words} words of dense content in third person about [[user]]. Use only what the notes and sheet support, plus small plausible detail.\n\n`
+        'Create 3-6 lorebook entries that DEEPEN WHO [[user]] IS, holding the material that should NOT sit in the always-on sheet. They surface only when the chat mentions them.\n'
+        + (hasPremise
+            ? 'Every entry must grow directly out of the PREMISE and the sheet. Cover what that concept implies and the sheet only hints at: its origin and how [[user]] came to be this; its rules, powers, limits and costs; the objects, places, people or bonds tied to it; the secret at its center and what happens if it comes out. An entry that would still make sense for a different persona is wrong; replace it.\n'
+            : 'Draw on what the notes and sheet establish: backstory episodes, secrets, relationships with side characters, places, objects, old wounds. An entry that would make sense for any persona is wrong; replace it.\n')
+        + `Each entry: a short title; 2-5 trigger keys (words or phrases likely to appear in the chat when this matters, in the chat's language, include name variants); ${words} words of dense content in third person about [[user]]. Build on what the ${hasPremise ? 'premise, ' : ''}notes and sheet establish; add only details that follow from them.\n\n`
         + 'Output exactly this format and nothing else, one header line then the content, for every entry:\n'
         + '@@ENTRY | Title | key one, key two, key three\n(content)',
     );

@@ -430,6 +430,20 @@
     opacity: 0.55;
 }
 
+#pw_overlay .pw-premise textarea {
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 60%, transparent);
+}
+
+#pw_overlay .pw-grow {
+    flex: 1 1 160px;
+    min-width: 0;
+}
+
+#pw_overlay .pw-grow input {
+    width: 100%;
+    flex: 1 1 auto;
+}
+
 #pw_overlay .pw-label select {
     width: 100%;
 }
