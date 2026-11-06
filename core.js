@@ -24,6 +24,48 @@ export const LABELS = {
 
 const THAI_RANGE = '\\u0E00-\\u0E7F';
 
+// ---------------------------------------------------------------------------
+// Persona size. The persona sits in every prompt, so every token in it is paid on every
+// turn. Each size sets a total budget and how many lines the list-shaped layers may have;
+// the caps are enforced on the model's output too, not only asked for.
+// ---------------------------------------------------------------------------
+
+export const SIZES = {
+    lean: { tokens: 250, coreWords: 40, voiceWords: 25, lineWords: 14, lines: { tension: 2, samples: 3, asymmetry: 2, rules: 3 } },
+    standard: { tokens: 400, coreWords: 60, voiceWords: 40, lineWords: 18, lines: { tension: 3, samples: 4, asymmetry: 3, rules: 4 } },
+    rich: { tokens: 650, coreWords: 90, voiceWords: 60, lineWords: 22, lines: { tension: 4, samples: 5, asymmetry: 4, rules: 5 } },
+};
+
+export function sizeKey(size) {
+    return Object.hasOwn(SIZES, size) ? size : 'lean';
+}
+
+export function sizeSpec(size) {
+    return SIZES[sizeKey(size)];
+}
+
+/** Keep at most `max` non-empty lines. Used on model output for the list-shaped layers. */
+export function capLines(text, max) {
+    const lines = String(text ?? '').split('\n').map(l => l.trimEnd()).filter(l => l.trim());
+    return (max > 0 ? lines.slice(0, max) : lines).join('\n');
+}
+
+/** Apply the size's line caps to one layer of model output. */
+export function fitLayer(key, text, size) {
+    const max = sizeSpec(size).lines[key];
+    return max ? capLines(text, max) : String(text ?? '').trim();
+}
+
+/** True when version string a is newer than b (1.10.0 > 1.9.3). */
+export function newerVersion(a, b) {
+    const pa = String(a ?? '').split('.').map(n => parseInt(n, 10) || 0);
+    const pb = String(b ?? '').split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+    }
+    return false;
+}
+
 export function emptySections() {
     return Object.fromEntries(SECTION_KEYS.map(k => [k, '']));
 }
