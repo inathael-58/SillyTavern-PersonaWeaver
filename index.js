@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.5.0'; // keep in sync with manifest.json
+const VERSION = '0.6.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -47,6 +47,8 @@ const DEFAULTS = Object.freeze({
     messages: 40,
     size: 'lean',
     ideaMix: 'mix',
+    nameSource: 'mix',
+    namesWithWeave: true,
     source: 'main',
     timeoutSec: 120,
 });
@@ -81,6 +83,8 @@ const state = {
     ideas: [],
     premise: '', // the chosen idea(s): the foundation every prompt builds on
     gender: '', // '' | 'female' | 'male' | 'nonbinary'
+    names: [], // [{ name, note }] suggestions; tapping one fills the name field
+    collapsed: {}, // step key -> true when the user folded that step
     pronouns: '', // optional free text, e.g. "she/her" or "ข้า/เจ้า"
 
     busy: false,
@@ -292,20 +296,29 @@ async function weave(keys) {
         const charCard = currentCharCard();
         if (!state.notes.trim() && !state.premise.trim() && !hasSections() && !charCard) throw new Error(t.needNotes);
         const size = sizeNow();
+        const withNames = wantsNamesWithWeave(keys);
         const p = prompts.buildWeavePrompt({
             keys,
             lang: concreteLang(),
             size,
-            name: personaName(),
+            name: state.target === 'new' ? state.name.trim() : personaName(),
             notes: state.notes,
             sections: state.sections,
             charCard,
             ...identity(),
+            withNames,
+            worldNames: withNames && nameSource() !== 'new' ? await worldNamesFor(targetChar()) : '',
+            nameSource: nameSource(),
         });
-        const task = keys.length === 1 ? fmt(t.task_regen, { layer: t['sec_' + keys[0]] }) : t.task_weaveAll;
-        const parsed = await askBlocks(p, keys, keys.length === 1 ? settings().otherTokens : settings().weaveTokens, task);
+        let task = keys.length === 1 ? fmt(t.task_regen, { layer: t['sec_' + keys[0]] }) : t.task_weaveAll;
+        if (withNames) task += ` + ${fmt(t.task_names, { n: core.NAMES_PER_BATCH, kind: t['nameSource_' + nameSource()] })}`;
+        const parsed = await askBlocks(p, withNames ? [...keys, 'names'] : keys, keys.length === 1 ? settings().otherTokens : settings().weaveTokens, task);
         pushHistory();
         for (const k of keys) if (parsed[k]) state.sections[k] = tidy(core.fitLayer(k, parsed[k], size));
+        if (withNames && parsed.names) {
+            const names = core.parseNameLines(tidy(parsed.names));
+            if (names.length) state.names = names;
+        }
     });
 }
 
@@ -314,6 +327,55 @@ function ideaMix() {
 }
 
 /** A batch of ideas. With `more`, adds to the list and asks the model not to repeat what is there. */
+function nameSource() {
+    return core.NAME_SOURCES.includes(settings().nameSource) ? settings().nameSource : 'mix';
+}
+
+/** Titles and first keys of the bot's own lorebook, so names can come from its world. */
+async function worldNamesFor(c) {
+    try {
+        const book = c?.data?.extensions?.world;
+        if (!book || (Array.isArray(world_names) && !world_names.includes(book))) return '';
+        const data = await loadWorldInfo(book);
+        return core.worldNameList(data?.entries);
+    } catch {
+        return '';
+    }
+}
+
+function wantsNamesWithWeave(keys) {
+    return state.target === 'new' && settings().namesWithWeave && keys.length === SECTION_KEYS.length;
+}
+
+/** Name suggestions only, in one request. With `more`, adds to the list without repeats. */
+async function suggestNames(more = false) {
+    await run(async () => {
+        const t = ui();
+        const c = targetChar();
+        const p = prompts.buildNamesPrompt({
+            lang: concreteLang(),
+            notes: state.notes,
+            sections: state.sections,
+            charCard: currentCharCard(),
+            ...identity(),
+            worldNames: nameSource() === 'new' ? '' : await worldNamesFor(c),
+            source: nameSource(),
+            avoid: more ? state.names.map(n => n.name) : [],
+        });
+        const raw = await callModel(p, settings().otherTokens, fmt(t.task_names, { n: core.NAMES_PER_BATCH, kind: t['nameSource_' + nameSource()] }));
+        const block = core.parseTagged(raw, ['names']).names ?? raw;
+        const batch = core.parseNameLines(tidy(block));
+        if (!batch.length) throw new Error(t.errFormat);
+        state.names = more ? core.mergeNames(state.names, batch) : batch;
+    });
+}
+
+function pickName(i) {
+    const n = state.names[i];
+    if (!n) return;
+    state.name = n.name;
+}
+
 async function suggestIdeas(more = false) {
     await run(async () => {
         const t = ui();
@@ -606,7 +668,8 @@ function charPicker(dis) {
         .sort((a, b) => String(a.name).localeCompare(String(b.name)));
     // A picked character that no longer exists falls back to "none" in the list.
     return `
-<label class="pw-label">${esc(t.charPick)}
+<label class="pw-field">
+  <span class="pw-field-label"><i class="fa-solid fa-robot"></i> ${esc(t.charPick)}</span>
   <select class="text_pole" data-field="charSel" ${dis}>
     ${opt('@current', cur ? fmt(t.charCurrent, { name: cur.name }) : t.charCurrentNone)}
     ${opt('', t.charNone)}
@@ -633,12 +696,14 @@ function ideasBlock(dis) {
   <button class="menu_button pw-mini" data-act="useIdea:${i}" ${dis} ${idea.used ? 'disabled' : ''}><i class="fa-solid fa-${idea.used ? 'check' : 'arrow-down'}"></i> ${esc(idea.used ? t.ideasUsed : t.ideasUse)}</button>
 </div>`).join('');
     return `
+<div class="pw-or"><span>${esc(t.orIdeas)}</span></div>
 <div class="pw-row">
-  <label class="pw-inline">${esc(t.ideaMixLabel)}
+  <button class="menu_button" data-act="ideas" ${dis} ${off} title="${esc(hasChar ? t.ideasRun : t.ideasNeedChar)}"><i class="fa-solid fa-lightbulb"></i> ${esc(t.ideasRun)}</button>
+  <label class="pw-inline pw-small">${esc(t.ideaMixLabel)}
     <select class="text_pole" data-field="ideaMix" ${dis}>${mixOpts}</select>
   </label>
-  <button class="menu_button" data-act="ideas" ${dis} ${off} title="${esc(hasChar ? t.ideasRun : t.ideasNeedChar)}"><i class="fa-solid fa-lightbulb"></i> ${esc(t.ideasRun)}</button>
 </div>
+${hasChar ? '' : `<small class="pw-hint">${esc(t.ideasNeedChar)}</small>`}
 ${state.ideas.length ? `<div class="pw-ideas">${cards}</div>
 <div class="pw-row">
   <button class="menu_button" data-act="ideasMore" ${dis} ${off}><i class="fa-solid fa-plus"></i> ${esc(t.ideasMore)}</button>
@@ -648,17 +713,17 @@ ${state.ideas.length ? `<div class="pw-ideas">${cards}</div>
 
 function genderRow(dis) {
     const t = ui();
-    const opts = ['', 'female', 'male', 'nonbinary']
-        .map(g => `<option value="${g}" ${state.gender === g ? 'selected' : ''}>${esc(t['gender_' + (g || 'unset')])}</option>`)
-        .join('');
+    const icons = { '': 'fa-circle-question', female: 'fa-venus', male: 'fa-mars', nonbinary: 'fa-genderless' };
+    const opts = ['', 'female', 'male', 'nonbinary'].map(g => `
+<label class="pw-seg-opt ${state.gender === g ? 'on' : ''}">
+  <input type="radio" name="pw_gender" value="${g}" data-field="gender" ${state.gender === g ? 'checked' : ''} ${dis}>
+  <i class="fa-solid ${icons[g]}"></i> ${esc(t['gender_' + (g || 'unset')])}
+</label>`).join('');
     return `
-<div class="pw-row pw-gender">
-  <label class="pw-inline">${esc(t.genderLabel)}
-    <select class="text_pole" data-field="gender" ${dis}>${opts}</select>
-  </label>
-  <label class="pw-inline pw-grow">${esc(t.pronounsLabel)}
-    <input class="text_pole" data-field="pronouns" value="${esc(state.pronouns)}" placeholder="${esc(t.pronounsPlaceholder)}" ${dis}>
-  </label>
+<div class="pw-field">
+  <span class="pw-field-label">${esc(t.genderLabel)}</span>
+  <div class="pw-seg pw-seg-wrap" role="radiogroup">${opts}</div>
+  <input class="text_pole" data-field="pronouns" value="${esc(state.pronouns)}" placeholder="${esc(t.pronounsLabel)}: ${esc(t.pronounsPlaceholder)}" ${dis}>
 </div>`;
 }
 
@@ -666,52 +731,119 @@ function premiseBlock(dis) {
     const t = ui();
     if (!state.premise.trim() && !state.ideas.some(i => i.used)) return '';
     return `
-<label class="pw-label pw-premise">${esc(t.premiseLabel)} <small>${esc(t.premiseHint)}</small>
-  <textarea class="text_pole" rows="4" data-field="premise">${esc(state.premise)}</textarea>
-</label>
-<div class="pw-row"><button class="menu_button pw-mini" data-act="premiseClear" ${dis}><i class="fa-solid fa-xmark"></i> ${esc(t.premiseClear)}</button></div>`;
+<div class="pw-field pw-premise">
+  <div class="pw-field-head">
+    <span class="pw-field-label"><i class="fa-solid fa-star"></i> ${esc(t.premiseLabel)}</span>
+    <button class="menu_button pw-mini" data-act="premiseClear" ${dis} title="${esc(t.premiseClear)}"><i class="fa-solid fa-xmark"></i></button>
+  </div>
+  <small class="pw-hint">${esc(t.premiseHint)}</small>
+  <textarea class="text_pole" rows="3" data-field="premise">${esc(state.premise)}</textarea>
+</div>`;
+}
+
+/** One numbered, foldable step of the Weave tab. */
+function step(key, num, title, hint, done, body) {
+    const open = !state.collapsed[key];
+    return `
+<details class="pw-step ${done ? 'pw-step-done' : ''}" data-step="${key}" ${open ? 'open' : ''}>
+  <summary class="pw-step-head">
+    <span class="pw-step-num">${done ? '<i class="fa-solid fa-check"></i>' : num}</span>
+    <span class="pw-step-title"><b>${esc(title)}</b><small>${esc(hint)}</small></span>
+    <i class="fa-solid fa-chevron-down pw-step-caret"></i>
+  </summary>
+  <div class="pw-step-body">${body}</div>
+</details>`;
+}
+
+function targetSwitch(dis) {
+    const t = ui();
+    const active = hasActivePersona();
+    const seg = (v, icon, label, extra = '') => `
+<label class="pw-seg-opt ${state.target === v ? 'on' : ''} ${extra}">
+  <input type="radio" name="pw_target" value="${v}" data-field="target" ${state.target === v ? 'checked' : ''} ${v === 'active' && !active ? 'disabled' : ''} ${dis}>
+  <i class="fa-solid ${icon}"></i> ${label}
+</label>`;
+    return `
+<div class="pw-seg" role="radiogroup">
+  ${seg('new', 'fa-user-plus', esc(t.targetNew))}
+  ${seg('active', 'fa-user-pen', `${esc(t.targetActive)}${active ? ` <small>${esc(name1)}</small>` : ''}`, active ? '' : 'pw-off')}
+</div>
+${state.target === 'active' ? `<button class="menu_button pw-mini" data-act="loadActive" ${dis}><i class="fa-solid fa-file-import"></i> ${esc(t.loadActive)}</button>` : ''}`;
+}
+
+function nameBlock(dis) {
+    const t = ui();
+    if (state.target !== 'new') {
+        return `<div class="pw-field"><span class="pw-field-label">${esc(t.nameLabel)}</span><div class="pw-namefixed">${esc(name1)}</div><small class="pw-hint">${esc(t.nameActiveHint)}</small></div>`;
+    }
+    const src = nameSource();
+    const srcOpts = core.NAME_SOURCES
+        .map(v => `<option value="${v}" ${v === src ? 'selected' : ''}>${esc(t['nameSource_' + v])}</option>`)
+        .join('');
+    const chips = state.names.map((n, i) => `
+<button class="pw-name ${n.name === state.name.trim() ? 'on' : ''}" data-act="pickName:${i}" ${dis} title="${esc(t.namePick)}">
+  <b>${esc(n.name)}</b>${n.note ? `<small>${esc(n.note)}</small>` : ''}
+</button>`).join('');
+    return `
+<div class="pw-field">
+  <span class="pw-field-label">${esc(t.nameLabel)}</span>
+  <div class="pw-row pw-namerow">
+    <input class="text_pole" data-field="name" value="${esc(state.name)}" placeholder="${esc(t.namePlaceholder)}" ${dis}>
+    <button class="menu_button" data-act="names" ${dis} title="${esc(t.nameSuggest)}"><i class="fa-solid fa-signature"></i> ${esc(state.names.length ? t.nameMore : t.nameSuggest)}</button>
+  </div>
+  <div class="pw-row pw-small">
+    <label class="pw-inline">${esc(t.nameSourceLabel)} <select class="text_pole" data-field="nameSource" ${dis}>${srcOpts}</select></label>
+    <label class="pw-check"><input type="checkbox" data-field="namesWithWeave" ${settings().namesWithWeave ? 'checked' : ''} ${dis}> ${esc(t.nameWithWeave)}</label>
+  </div>
+  ${state.names.length ? `<div class="pw-names">${chips}</div>` : ''}
+  <label class="pw-check pw-small"><input type="checkbox" data-field="selectAfter" ${state.selectAfter ? 'checked' : ''}> ${esc(t.selectAfter)}</label>
+</div>`;
 }
 
 function weaveBody(dis) {
     const t = ui();
-    const active = hasActivePersona();
     const lang = settings().lang;
     const langOption = (v, label) => `<option value="${v}" ${lang === v ? 'selected' : ''}>${esc(label)}</option>`;
+    const hasConcept = Boolean(state.notes.trim() || state.premise.trim());
+    const woven = hasSections();
 
-    return `
-<div class="pw-row pw-targets">
-  <label class="pw-check"><input type="radio" name="pw_target" value="new" data-field="target" ${state.target === 'new' ? 'checked' : ''}> ${esc(t.targetNew)}</label>
-  <label class="pw-check"><input type="radio" name="pw_target" value="active" data-field="target" ${state.target === 'active' ? 'checked' : ''} ${active ? '' : 'disabled'}> ${esc(t.targetActive)}${active ? ` — ${esc(name1)}` : ''}</label>
-</div>
-${state.target === 'new' ? `
-<label class="pw-label">${esc(t.nameLabel)}
-  <input class="text_pole" data-field="name" value="${esc(state.name)}" placeholder="${esc(t.namePlaceholder)}">
-</label>
-<label class="pw-check"><input type="checkbox" data-field="selectAfter" ${state.selectAfter ? 'checked' : ''}> ${esc(t.selectAfter)}</label>` : ''}
-${genderRow(dis)}
+    const basics = `
+${targetSwitch(dis)}
 ${charPicker(dis)}
-${isFreshChat() && state.target === 'new' ? `<div class="pw-hint pw-fresh">${esc(t.freshHint)}</div>` : ''}
-<label class="pw-label">${esc(t.notesLabel)} <small>${esc(t.notesHint)}</small>
-  <textarea class="text_pole" rows="5" data-field="notes">${esc(state.notes)}</textarea>
+${genderRow(dis)}
+<label class="pw-inline pw-small">${esc(t.langLabel)}
+  <select class="text_pole" data-field="lang" ${dis}>${langOption('auto', t.langAuto)}${langOption('th', t.langTh)}${langOption('en', t.langEn)}</select>
+</label>
+${isFreshChat() && state.target === 'new' ? `<div class="pw-hint pw-fresh"><i class="fa-solid fa-seedling"></i> ${esc(t.freshHint)}</div>` : ''}`;
+
+    const concept = `
+<label class="pw-field">
+  <span class="pw-field-label">${esc(t.notesLabel)}</span>
+  <textarea class="text_pole" rows="3" data-field="notes" placeholder="${esc(t.notesHint)}">${esc(state.notes)}</textarea>
 </label>
 ${ideasBlock(dis)}
-${premiseBlock(dis)}
-<div class="pw-row">
-  <button class="menu_button" data-act="loadActive" ${dis} ${active ? '' : 'disabled'}>${esc(t.loadActive)}</button>
-  <label class="pw-inline">${esc(t.langLabel)}
-    <select class="text_pole" data-field="lang">${langOption('auto', t.langAuto)}${langOption('th', t.langTh)}${langOption('en', t.langEn)}</select>
-  </label>
-</div>
-<button class="menu_button pw-primary" data-act="weaveAll" ${dis}><i class="fa-solid fa-wand-magic-sparkles"></i> ${esc(t.weaveAll)}</button>
+${premiseBlock(dis)}`;
+
+    const weaveStep = `
+<button class="menu_button pw-primary pw-big" data-act="weaveAll" ${dis}><i class="fa-solid fa-wand-magic-sparkles"></i> ${esc(woven ? t.weaveAgain : t.weaveAll)}</button>
+${nameBlock(dis)}
 <div class="pw-sections">${SECTION_KEYS.map(k => sectionEditor(k, dis)).join('')}</div>
-<div class="pw-lore">
-  <label class="pw-check"><input type="checkbox" data-field="loreOn" ${state.loreOn ? 'checked' : ''}> ${esc(t.loreToggle)}</label>
-  ${state.loreOn ? `
-  <div class="pw-hint">${esc(fmt(t.loreHint, { name: core.loreBookName(personaName()) }))}</div>
-  <button class="menu_button" data-act="loreGen" ${dis}>${esc(t.loreGenerate)}</button>
-  ${state.lore.map((e, i) => loreEditor(e, i, dis)).join('')}` : ''}
-</div>
 <details class="pw-preview"><summary>${esc(t.previewSummary)}</summary><pre>${esc(finalText())}</pre></details>`;
+
+    const lore = `
+<label class="pw-check"><input type="checkbox" data-field="loreOn" ${state.loreOn ? 'checked' : ''}> ${esc(t.loreToggle)}</label>
+${state.loreOn ? `
+<div class="pw-hint">${esc(fmt(t.loreHint, { name: core.loreBookName(personaName()) }))}</div>
+<button class="menu_button" data-act="loreGen" ${dis}><i class="fa-solid fa-book"></i> ${esc(t.loreGenerate)}</button>
+${state.lore.map((e, i) => loreEditor(e, i, dis)).join('')}` : ''}`;
+
+    return `
+<div class="pw-steps">
+  ${step('basics', 1, t.step_basics, t.stepHint_basics, false, basics)}
+  ${step('concept', 2, t.step_concept, t.stepHint_concept, hasConcept, concept)}
+  ${step('weave', 3, t.step_weave, t.stepHint_weave, woven && (state.target !== 'new' || Boolean(state.name.trim())), weaveStep)}
+  ${step('lore', 4, t.step_lore, t.stepHint_lore, state.loreOn && state.lore.length > 0, lore)}
+</div>`;
 }
 
 function countField(dis) {
@@ -980,7 +1112,7 @@ function stashDraft() {
     try {
         sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
             mode: state.mode, target: state.target, name: state.name, notes: state.notes,
-            premise: state.premise, gender: state.gender, pronouns: state.pronouns,
+            premise: state.premise, gender: state.gender, pronouns: state.pronouns, names: state.names,
             sections: state.sections, loreOn: state.loreOn, lore: state.lore, charSel: state.charSel, ideas: state.ideas, open: Boolean(document.getElementById('pw_overlay')),
         }));
     } catch { /* storage blocked: the draft is lost, the reload still works */ }
@@ -1000,6 +1132,7 @@ function restoreDraft() {
     state.premise = String(draft.premise ?? '');
     state.gender = ['female', 'male', 'nonbinary'].includes(draft.gender) ? draft.gender : '';
     state.pronouns = String(draft.pronouns ?? '');
+    state.names = Array.isArray(draft.names) ? draft.names : [];
     state.sections = { ...core.emptySections(), ...(draft.sections ?? {}) };
     state.loreOn = Boolean(draft.loreOn);
     state.lore = Array.isArray(draft.lore) ? draft.lore : [];
@@ -1040,6 +1173,8 @@ function onClick(event) {
         case 'ideas': suggestIdeas(false); return;
         case 'ideasMore': suggestIdeas(true); return;
         case 'ideasClear': state.ideas = []; render(); return;
+        case 'names': suggestNames(state.names.length > 0); return;
+        case 'pickName': pickName(Number(arg)); render(); return;
         case 'premiseClear':
             state.premise = '';
             state.ideas.forEach((idea) => { idea.used = false; });
@@ -1088,7 +1223,9 @@ function onChange(event) {
         state.target = el.value;
         if (state.target === 'active' && !state.notes.trim() && !hasSections()) loadActive();
     } else if (field === 'selectAfter') state.selectAfter = el.checked;
-    else if (field === 'gender') { state.gender = ['female', 'male', 'nonbinary'].includes(el.value) ? el.value : ''; return; }
+    else if (field === 'gender') state.gender = ['female', 'male', 'nonbinary'].includes(el.value) ? el.value : '';
+    else if (field === 'nameSource') { settings().nameSource = core.NAME_SOURCES.includes(el.value) ? el.value : 'mix'; saveSettingsDebounced(); return; }
+    else if (field === 'namesWithWeave') { settings().namesWithWeave = el.checked; saveSettingsDebounced(); return; }
     else if (field === 'ideaMix') { settings().ideaMix = core.IDEA_MIXES.includes(el.value) ? el.value : 'mix'; saveSettingsDebounced(); return; }
     else if (field === 'charSel') {
         state.charSel = el.value;
@@ -1124,6 +1261,10 @@ function openWeaver() {
     root.addEventListener('click', onClick);
     root.addEventListener('input', onInput);
     root.addEventListener('change', onChange);
+    root.addEventListener('toggle', (e) => {
+        const step = e.target?.dataset?.step;
+        if (step) state.collapsed[step] = !e.target.open;
+    }, true);
     document.body.appendChild(root);
     document.addEventListener('keydown', onKey);
     render();

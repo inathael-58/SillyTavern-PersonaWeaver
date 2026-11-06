@@ -5,8 +5,9 @@ import {
     parseTagged, parseLore, splitKeys, assemblePersona, parsePersona, applyPatch, changedKeys,
     buildTranscript, styleStats, loreBookName, loreEntryFields, estimateTokens,
     SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion, parseIdeas, mergeIdeas, ideaSplit, LABELS,
+    parseNameLines, mergeNames, worldNameList, NAMES_PER_BATCH,
 } from '../core.js';
-import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt, genderRule } from '../prompts.js';
+import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt, genderRule, buildNamesPrompt } from '../prompts.js';
 import { STRINGS, fmt, resolveUiLang } from '../i18n.js';
 
 test('i18n: every language has exactly the same keys, none empty, same placeholders', () => {
@@ -408,4 +409,40 @@ test('gender reaches every prompt that writes about the persona', () => {
     assert.ok(all[0].prompt.includes('CORE opens with [[user]]\'s gender'));
     assert.ok(all[1].prompt.includes('Every idea keeps this gender'));
     assert.ok(!buildEvolvePrompt({ lang: 'en', name: 'K', sections: { core: 'c' }, transcript: 't' }).prompt.includes('\n\n\n'), 'no blank block when unset');
+});
+
+test('parseNameLines reads "name | note", other separators, bullets, and drops repeats and junk', () => {
+    const out = parseNameLines('<<NAMES>>\n1. **Layla Vane** | fallen house\n- Zayn al-Ashkar — alias\nNoor - slave name\nlayla vane | dup\n\n' + 'x'.repeat(70) + '\nสุริยา ศรีวังเดิม | ราชสกุลเก่า');
+    assert.deepEqual(out.map(n => n.name), ['Layla Vane', 'Zayn al-Ashkar', 'Noor', 'สุริยา ศรีวังเดิม']);
+    assert.equal(out[0].note, 'fallen house');
+    assert.equal(parseNameLines('Just A Name')[0].note, '');
+    assert.deepEqual(mergeNames(out.slice(0, 1), [{ name: 'LAYLA VANE', note: '' }, { name: 'Karim', note: 'n' }]).map(n => n.name), ['Layla Vane', 'Karim']);
+});
+
+test('worldNameList takes titles and first keys, skips disabled and long ones, respects the cap', () => {
+    const entries = {
+        1: { comment: 'House Vane', key: ['Vane', 'vane house'] },
+        2: { comment: 'house vane', key: ['Ashkar'] },
+        3: { comment: 'Hidden', key: ['h'], disable: true },
+        4: { comment: 'A'.repeat(50), key: [] },
+    };
+    assert.equal(worldNameList(entries), 'House Vane, Vane, Ashkar');
+    assert.equal(worldNameList(entries, 12), 'House Vane');
+    assert.equal(worldNameList(undefined), '');
+});
+
+test('names prompt: source rules, world list, avoid list, gender; weave adds NAMES only when asked', () => {
+    const base = { lang: 'th', notes: '', sections: {}, charCard: { name: 'Iris', text: 'knight' }, premise: 'Djinn', gender: 'female' };
+    const world = buildNamesPrompt({ ...base, worldNames: 'House Vane, Ashkar', source: 'world', avoid: ['Layla {{char}}'] });
+    assert.ok(world.prompt.includes('WORLD NAMES') && world.prompt.includes('House Vane'));
+    assert.ok(world.prompt.includes('Build them from the WORLD NAMES list'));
+    assert.ok(world.prompt.includes(`exactly ${NAMES_PER_BATCH} name ideas`) && world.prompt.includes('<<NAMES>>'));
+    assert.ok(world.prompt.includes('Layla [[char]]') && world.prompt.includes('FEMALE') && world.prompt.includes('PREMISE'));
+    const fresh = buildNamesPrompt({ ...base, worldNames: '', source: 'world' });
+    assert.ok(fresh.prompt.includes('Invent fresh names') && !fresh.prompt.includes('WORLD NAMES'), 'no lorebook falls back to fresh names');
+    const w1 = buildWeavePrompt({ lang: 'en', name: '', notes: 'n', sections: {} });
+    assert.ok(!w1.prompt.includes('<<NAMES>>'));
+    const w2 = buildWeavePrompt({ lang: 'en', name: '', notes: 'n', sections: {}, withNames: true, worldNames: 'Ashkar', nameSource: 'mix' });
+    assert.ok(w2.prompt.includes('<<NAMES>>') && w2.prompt.includes('About half should draw on') && w2.prompt.includes('does not count toward the size budget'));
+    assert.ok(!/\{\{\s*(user|char)\s*\}\}/i.test(w2.prompt + world.prompt));
 });
