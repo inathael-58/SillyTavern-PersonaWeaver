@@ -34,6 +34,10 @@ The model is told the budget and per-block word limits, asked never to repeat a 
 
 ## What it does
 
+The Weave tab is four numbered steps you can fold away: **1 Basics** (new or existing persona, the bot, gender and pronouns), **2 Concept** (your notes, or ideas from the bot turned into a premise), **3 Weave and name**, **4 Lorebook** (optional). A step shows a tick once it is done.
+
+**Names.** A name and surname are a status in the story, so Weaver suggests them. For a new persona, *Weave all layers* also returns about eight names in the same request, each with a short note on what it signals (old nobility, fallen house, commoner, foreigner, an alias that hides the truth…). Tap one to put it in the name field; *More names* adds another batch without repeats. Pick where names come from: *From the bot's world* (the titles and keywords of the bot's own lorebook, not their contents), *Brand new*, or *Mixed*. Names follow the persona's gender, the premise and the setting's naming style.
+
 **Weave.** Paste rough notes, press *Weave all layers*. You get seven editable layers:
 
 | Layer | What it holds |

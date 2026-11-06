@@ -247,6 +247,77 @@ export function parseIdeas(raw) {
         .slice(0, MAX_IDEAS);
 }
 
+// ---------------------------------------------------------------------------
+// Names
+// ---------------------------------------------------------------------------
+
+export const NAME_SOURCES = ['mix', 'world', 'new'];
+export const NAMES_PER_BATCH = 8;
+const MAX_NAMES = 24;
+
+/**
+ * Read name suggestions, one per line: `Full name | what it says about status`.
+ * Also accepts an em dash or " - " as the separator, list bullets and numbering.
+ */
+export function parseNameLines(text) {
+    const out = [];
+    const seen = new Set();
+    for (const raw of String(text ?? '').replace(/\r\n/g, '\n').split('\n')) {
+        const line = raw.trim().replace(/^(?:[-•*]|\d+[.)])\s*/, '').replace(/^\*\*(.+?)\*\*/, '$1');
+        if (!line || /^<<|^@@/.test(line)) continue;
+        const m = line.match(/^(.+?)\s*(?:\||—|–|\s-\s)\s*(.*)$/);
+        const name = (m ? m[1] : line).replace(/^["“'‘]+|["”'’]+$/g, '').trim();
+        const note = (m ? m[2] : '').trim();
+        if (!name || name.length > 60) continue;
+        const id = name.toLowerCase();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push({ name, note });
+    }
+    return out.slice(0, MAX_NAMES);
+}
+
+export function mergeNames(existing, batch) {
+    const seen = new Set((existing ?? []).map(n => String(n.name).trim().toLowerCase()));
+    const out = [...(existing ?? [])];
+    for (const n of batch ?? []) {
+        const id = String(n.name).trim().toLowerCase();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        out.push(n);
+    }
+    return out.slice(-MAX_NAMES);
+}
+
+/**
+ * A short list of the names a lorebook knows (entry titles and first keys), for flavour:
+ * houses, clans, places, naming patterns. Entry contents are not sent.
+ */
+export function worldNameList(entries, maxChars = 900) {
+    const seen = new Set();
+    const names = [];
+    const add = (v) => {
+        const n = String(v ?? '').replace(/\s+/g, ' ').trim();
+        if (!n || n.length > 40 || /^\d+$/.test(n)) return;
+        const id = n.toLowerCase();
+        if (seen.has(id)) return;
+        seen.add(id);
+        names.push(n);
+    };
+    for (const e of Object.values(entries ?? {})) {
+        if (!e || e.disable) continue;
+        add(e.comment);
+        if (Array.isArray(e.key) && e.key.length) add(e.key[0]);
+    }
+    let out = '';
+    for (const n of names) {
+        const next = out ? `${out}, ${n}` : n;
+        if (next.length > maxChars) break;
+        out = next;
+    }
+    return out;
+}
+
 /** Add a new batch to the ideas already shown, skipping repeated titles, keeping the list bounded. */
 export function mergeIdeas(existing, batch) {
     const seen = new Set((existing ?? []).map(i => String(i.title).trim().toLowerCase()));

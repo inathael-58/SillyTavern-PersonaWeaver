@@ -5,7 +5,7 @@
 // The persona is sent on every turn, so every block is written to a size budget (core.SIZES).
 // The line caps asked for here are also enforced on the output by core.fitLayer().
 
-import { SECTION_KEYS, LABELS, maskMacros, formatStats, sizeSpec, ideaSplit } from './core.js';
+import { SECTION_KEYS, LABELS, maskMacros, formatStats, sizeSpec, ideaSplit, NAMES_PER_BATCH } from './core.js';
 
 const PRINCIPLES = `You are a character-writing editor for a roleplay platform. You write persona sheets for the PLAYER's character, called [[user]] in the sheet. Another AI reads the sheet on EVERY turn to roleplay with [[user]] or to write [[user]]'s turns, so every word costs tokens on every turn.
 
@@ -145,7 +145,7 @@ function notesText(notes, charCard, premise) {
  * @param {{name:string,text:string}} [p.charCard]
  * @param {string} [p.styleNotes] extra evidence, e.g. style statistics
  */
-export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes, sections, charCard, styleNotes, premise, gender, pronouns }) {
+export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes, sections, charCard, styleNotes, premise, gender, pronouns, withNames = false, worldNames = '', nameSource = 'mix' }) {
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const partial = keys.length < SECTION_KEYS.length;
     const specs = blockSpecs(size);
@@ -164,16 +164,64 @@ export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes,
     const cc = charBlock(charCard, premise);
     if (cc) parts.push(cc);
     if (styleNotes) parts.push(`EVIDENCE ABOUT HOW THE PLAYER ACTUALLY WRITES:\n${maskMacros(styleNotes)}`);
+    const wb = withNames ? worldBlock(worldNames) : '';
+    if (wb) parts.push(wb);
+    const outKeys = withNames ? [...keys, 'names'] : keys;
 
     parts.push(
         `${partial ? 'Write ONLY these blocks, consistent with the rest of the draft and without repeating it.' : 'Write all of these blocks.'}\n\n`
         + `${keys.map(k => specs[k]).join('\n')}\n`
         + `${keys.includes('core') && (gender || String(pronouns ?? '').trim()) ? 'CORE opens with [[user]]\'s gender and pronouns in a few words, so any AI reading the sheet uses them (e.g. "Woman, she/her." or "หญิง (เธอ)").\n' : ''}`
         + `${hasPremise ? 'Check before answering: every block you write must clearly come from the PREMISE.\n' : ''}`
+        + `${withNames ? `${namesSpec({ source: nameSource, hasWorld: Boolean(wb) })} The NAMES block does not count toward the size budget.\n` : ''}`
         + `\n${budgetLine(size)}\n\n`
-        + `Output exactly this format and nothing else:\n${blockFormat(keys)}`,
+        + `Output exactly this format and nothing else:\n${blockFormat(outKeys)}`,
     );
 
+    return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };
+}
+
+/** How the names should be sourced. */
+function nameSourceRule(source, hasWorld) {
+    if (!hasWorld || source === 'new') return 'Invent fresh names that suit the setting; do not borrow existing names from the card.';
+    if (source === 'world') return 'Build them from the WORLD NAMES list: its houses, clans, places and naming patterns. A new name is fine when it clearly follows those patterns.';
+    return 'About half should draw on the WORLD NAMES list (its houses, clans, places, naming patterns); the rest freshly invented in the same style.';
+}
+
+/** Instructions for a NAMES block, shared by the weave prompt and the names-only prompt. */
+export function namesSpec({ source = 'mix', hasWorld = false, count = NAMES_PER_BATCH } = {}) {
+    return `NAMES: exactly ${count} name ideas for [[user]], one per line, as "Full name | what this name says about [[user]]". `
+        + 'A name is a status: give a given name plus family name, or whatever naming form this world uses (clan name, title, epithet, a single name with a byname). '
+        + 'Each must fit [[user]]\'s gender, the premise and the culture of [[char]]\'s world, and the note (at most 15 words) says what it signals in the story: old nobility, fallen house, commoner, foreigner, outcast, an alias that hides the truth, a name with a hidden meaning. Make them varied in status and in sound. '
+        + 'Never reuse [[char]]\'s own name; reuse a family or house from the world only as a deliberate story point and say so in the note. '
+        + 'Write each name in the script the setting uses (as the card and lorebook write names); write the note in the output language. '
+        + nameSourceRule(source, hasWorld);
+}
+
+function worldBlock(worldNames) {
+    const w = String(worldNames ?? '').trim();
+    return w ? `WORLD NAMES (titles and keywords from [[char]]'s lorebook, for flavour):\n${maskMacros(w)}` : '';
+}
+
+/** Names only: suggestions for the persona's name, without rewriting anything else. */
+export function buildNamesPrompt({ lang, notes, sections, charCard, premise, gender, pronouns, worldNames, source = 'mix', avoid = [] }) {
+    const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
+    const parts = [];
+    const id = identityBlock(gender, pronouns, lang);
+    if (id) parts.push(id);
+    if (String(premise ?? '').trim()) parts.push(premiseBlock(premise));
+    if (String(notes ?? '').trim()) parts.push(`AUTHOR'S NOTES:\n${maskMacros(notes)}`);
+    if (draft) parts.push(`PERSONA SHEET:\n${maskMacros(draft)}`);
+    const cc = charBlock(charCard, premise);
+    if (cc) parts.push(cc);
+    const wb = worldBlock(worldNames);
+    if (wb) parts.push(wb);
+    const seen = avoid.map(n => String(n ?? '').trim()).filter(Boolean);
+    if (seen.length) parts.push(`ALREADY SUGGESTED (do not repeat these or close variants):\n${seen.map(n => `- ${maskMacros(n)}`).join('\n')}`);
+    parts.push(
+        `${namesSpec({ source, hasWorld: Boolean(wb) })}\n\n`
+        + 'Output exactly this format and nothing else:\n<<NAMES>>\nFull name | note\n<</NAMES>>',
+    );
     return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };
 }
 
