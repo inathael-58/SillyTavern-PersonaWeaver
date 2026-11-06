@@ -1,11 +1,12 @@
 // Persona Weaver — pure helpers.
 // No SillyTavern imports here, so everything in this file can be tested in plain Node.
 
-export const SECTION_KEYS = ['core', 'tension', 'voice', 'samples', 'asymmetry', 'rules'];
+export const SECTION_KEYS = ['core', 'look', 'tension', 'voice', 'samples', 'asymmetry', 'rules'];
 
 export const LABELS = {
     en: {
         core: 'Core',
+        look: 'Appearance',
         tension: 'Inner conflict',
         voice: 'Voice',
         samples: 'Voice samples',
@@ -14,6 +15,7 @@ export const LABELS = {
     },
     th: {
         core: 'แก่นตัวตน',
+        look: 'รูปลักษณ์',
         tension: 'ความขัดแย้งภายใน',
         voice: 'น้ำเสียง',
         samples: 'ตัวอย่างคำพูด',
@@ -31,9 +33,9 @@ const THAI_RANGE = '\\u0E00-\\u0E7F';
 // ---------------------------------------------------------------------------
 
 export const SIZES = {
-    lean: { tokens: 250, coreWords: 40, voiceWords: 25, lineWords: 14, lines: { tension: 2, samples: 3, asymmetry: 2, rules: 3 } },
-    standard: { tokens: 400, coreWords: 60, voiceWords: 40, lineWords: 18, lines: { tension: 3, samples: 4, asymmetry: 3, rules: 4 } },
-    rich: { tokens: 650, coreWords: 90, voiceWords: 60, lineWords: 22, lines: { tension: 4, samples: 5, asymmetry: 4, rules: 5 } },
+    lean: { tokens: 280, lookWords: 30, coreWords: 40, voiceWords: 25, lineWords: 14, lines: { tension: 2, samples: 3, asymmetry: 2, rules: 3 } },
+    standard: { tokens: 440, lookWords: 45, coreWords: 60, voiceWords: 40, lineWords: 18, lines: { tension: 3, samples: 4, asymmetry: 3, rules: 4 } },
+    rich: { tokens: 700, lookWords: 60, coreWords: 90, voiceWords: 60, lineWords: 22, lines: { tension: 4, samples: 5, asymmetry: 4, rules: 5 } },
 };
 
 export function sizeKey(size) {
@@ -209,7 +211,15 @@ export function parseLore(raw) {
         .filter(e => e.content && e.keys.length);
 }
 
-/** Parse `@@IDEA | Title` followed by a few lines of pitch. */
+export const IDEA_KINDS = ['fit', 'wild'];
+export const IDEA_MIXES = ['mix', 'fit', 'wild'];
+export const IDEAS_PER_BATCH = 6;
+const MAX_IDEAS = 24;
+
+/**
+ * Parse `@@IDEA | kind | Title` (kind is fit or wild) followed by a few lines of pitch.
+ * `@@IDEA | Title` without a kind is read as kind 'fit'.
+ */
 export function parseIdeas(raw) {
     const text = stripFences(raw).replace(/\r\n/g, '\n');
     const ideas = [];
@@ -218,16 +228,44 @@ export function parseIdeas(raw) {
         const m = line.match(/^\s*@@IDEA\s*\|?\s*(.*?)\s*$/i);
         if (m) {
             if (current) ideas.push(current);
-            current = { title: m[1].replace(/\|\s*$/, '').trim(), lines: [] };
+            const fields = m[1].split('|').map(f => f.trim()).filter(Boolean);
+            let kind = 'fit';
+            const tag = (fields[0] ?? '').toLowerCase().replace(/[^a-z]/g, '');
+            if (fields.length > 1 && IDEA_KINDS.includes(tag)) {
+                kind = tag;
+                fields.shift();
+            }
+            current = { kind, title: fields.join(' | '), lines: [] };
             continue;
         }
         if (current) current.lines.push(line);
     }
     if (current) ideas.push(current);
     return ideas
-        .map(i => ({ title: i.title || 'Idea', text: i.lines.join('\n').trim() }))
+        .map(i => ({ kind: i.kind, title: i.title || 'Idea', text: i.lines.join('\n').trim() }))
         .filter(i => i.text)
-        .slice(0, 5);
+        .slice(0, MAX_IDEAS);
+}
+
+/** Add a new batch to the ideas already shown, skipping repeated titles, keeping the list bounded. */
+export function mergeIdeas(existing, batch) {
+    const seen = new Set((existing ?? []).map(i => String(i.title).trim().toLowerCase()));
+    const out = [...(existing ?? [])];
+    for (const idea of batch ?? []) {
+        const id = String(idea.title).trim().toLowerCase();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(idea);
+    }
+    return out.slice(-MAX_IDEAS);
+}
+
+/** How many fitting and wild ideas a batch should hold for a mix setting. */
+export function ideaSplit(mix, total = IDEAS_PER_BATCH) {
+    if (mix === 'fit') return { fit: total, wild: 0 };
+    if (mix === 'wild') return { fit: 0, wild: total };
+    const wild = Math.ceil(total / 2);
+    return { fit: total - wild, wild };
 }
 
 // ---------------------------------------------------------------------------
