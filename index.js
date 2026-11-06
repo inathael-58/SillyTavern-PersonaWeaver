@@ -8,9 +8,9 @@ import {
     chat,
     eventSource,
     event_types,
-    generateRaw,
     name1,
     name2,
+    saveSettings,
     saveSettingsDebounced,
     this_chid,
 } from '../../../../script.js';
@@ -24,12 +24,19 @@ import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.j
 import { getTokenCountAsync } from '../../../tokenizers.js';
 import { createWorldInfoEntry, loadWorldInfo, saveWorldInfo, updateWorldInfoList, world_names } from '../../../world-info.js';
 
+import * as api from './api.js';
 import * as core from './core.js';
 import { SECTION_KEYS } from './core.js';
 import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
+const VERSION = '0.2.0'; // keep in sync with manifest.json
+const BASE_URL = new URL('.', import.meta.url);
+/** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
+const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
+const DRAFT_KEY = 'persona_weaver_draft';
+
 const DEFAULTS = Object.freeze({
     uiLang: 'auto',
     lang: 'auto',
@@ -38,8 +45,13 @@ const DEFAULTS = Object.freeze({
     weaveTokens: 1500,
     otherTokens: 1000,
     messages: 40,
+    size: 'lean',
+    source: 'main',
+    timeoutSec: 120,
 });
-const TOKEN_WARN = 700;
+/** Warn when the persona is this much over its size budget. */
+const BUDGET_SLACK = 1.15;
+const CHAR_CARD_CHARS = 1200;
 
 function settings() {
     extension_settings[MODULE] = Object.assign({}, DEFAULTS, extension_settings[MODULE]);
@@ -64,8 +76,14 @@ const state = {
     history: [],
     lastRaw: '',
     busy: false,
+    sendingTo: '',
+    lastCall: null,
+    tokenCount: 0,
     initialised: false,
 };
+
+/** Thrown when the user declines a request in the confirm dialog. */
+class Cancelled extends Error {}
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -105,7 +123,7 @@ function currentCharCard() {
     if (!settings().useCharCard) return undefined;
     const c = characters?.[this_chid];
     if (!c) return undefined;
-    const text = [c.description, c.personality, c.scenario].filter(Boolean).join('\n\n').slice(0, 1800);
+    const text = [c.description, c.personality, c.scenario].filter(Boolean).join('\n\n').slice(0, CHAR_CARD_CHARS);
     return text ? { name: c.name, text } : undefined;
 }
 
@@ -140,19 +158,43 @@ function pushHistory() {
 // Model calls
 // ---------------------------------------------------------------------------
 
-async function callModel(p, responseLength) {
-    const raw = await generateRaw({
-        prompt: p.prompt,
-        systemPrompt: p.systemPrompt,
-        responseLength,
-        trimNames: false,
-    });
-    state.lastRaw = raw;
-    return raw;
+function sizeNow() {
+    return core.sizeKey(settings().size);
 }
 
-async function askBlocks(p, keys, responseLength) {
-    const raw = await callModel(p, responseLength);
+function budgetNow() {
+    return core.sizeSpec(sizeNow()).tokens;
+}
+
+/**
+ * Every request goes through here: the user sees the task, the API, the size of the request
+ * and (on demand) the exact text, and must press Send. Nothing is sent otherwise.
+ */
+async function callModel(p, responseLength, task) {
+    const t = ui();
+    const src = await confirmRequest({ task, p, maxTokens: responseLength });
+    if (!src) throw new Cancelled(t.cancelled);
+
+    const label = api.sourceLabel(src, t.apiMain);
+    state.sendingTo = label;
+    render();
+    const t0 = Date.now();
+    try {
+        const raw = await api.send(src, p, responseLength, settings().timeoutSec * 1000, {
+            timeout: n => fmt(t.errTimeout, { n }),
+            empty: t.errEmpty,
+            noProfiles: t.errNoProfiles,
+        });
+        state.lastRaw = raw;
+        return raw;
+    } finally {
+        state.lastCall = { label, ms: Date.now() - t0 };
+        state.sendingTo = '';
+    }
+}
+
+async function askBlocks(p, keys, responseLength, task) {
+    const raw = await callModel(p, responseLength, task);
     const parsed = core.parseTagged(raw, keys);
     if (!keys.some(k => parsed[k])) throw new Error(ui().errFormat);
     return parsed;
@@ -166,10 +208,15 @@ async function run(task) {
     try {
         await task();
     } catch (err) {
-        console.error('[Persona Weaver]', err);
-        toastr.error(String(err?.message ?? err), ui().title);
+        if (err instanceof Cancelled) {
+            toastr.info(err.message, ui().title, { timeOut: 2500 });
+        } else {
+            console.error('[Persona Weaver]', err);
+            toastr.error(String(err?.message ?? err), ui().title);
+        }
     } finally {
         state.busy = false;
+        state.sendingTo = '';
         render();
     }
 }
@@ -199,17 +246,38 @@ async function weave(keys) {
     await run(async () => {
         const t = ui();
         if (!state.notes.trim() && !hasSections()) throw new Error(t.needNotes);
+        const size = sizeNow();
         const p = prompts.buildWeavePrompt({
             keys,
             lang: concreteLang(),
+            size,
             name: personaName(),
             notes: state.notes,
             sections: state.sections,
             charCard: currentCharCard(),
         });
-        const parsed = await askBlocks(p, keys, settings().weaveTokens);
+        const task = keys.length === 1 ? fmt(t.task_regen, { layer: t['sec_' + keys[0]] }) : t.task_weaveAll;
+        const parsed = await askBlocks(p, keys, keys.length === 1 ? settings().otherTokens : settings().weaveTokens, task);
         pushHistory();
-        for (const k of keys) if (parsed[k]) state.sections[k] = tidy(parsed[k]);
+        for (const k of keys) if (parsed[k]) state.sections[k] = tidy(core.fitLayer(k, parsed[k], size));
+    });
+}
+
+async function condense() {
+    await run(async () => {
+        const t = ui();
+        if (!hasSections()) throw new Error(t.nothingToSave);
+        const size = sizeNow();
+        const n = await countTokens(finalText());
+        if (n <= budgetNow()) {
+            toastr.info(t.condenseNothing, t.title);
+            return;
+        }
+        const p = prompts.buildCondensePrompt({ lang: concreteLang(), size, name: personaName(), sections: state.sections });
+        const task = fmt(t.task_condense, { size: t['sizeShort_' + size] });
+        const parsed = await askBlocks(p, p.keys, settings().weaveTokens, task);
+        pushHistory();
+        for (const k of p.keys) if (parsed[k]) state.sections[k] = tidy(core.fitLayer(k, parsed[k], size));
     });
 }
 
@@ -219,12 +287,13 @@ async function generateLore() {
         if (!state.notes.trim() && !hasSections()) throw new Error(t.needNotes);
         const p = prompts.buildLorePrompt({
             lang: concreteLang(),
+            size: sizeNow(),
             name: personaName(),
             notes: state.notes,
             sections: state.sections,
             charCard: currentCharCard(),
         });
-        const raw = await callModel(p, settings().otherTokens);
+        const raw = await callModel(p, settings().otherTokens, t.task_lore);
         const entries = core.parseLore(raw);
         if (!entries.length) throw new Error(t.errFormat);
         pushHistory();
@@ -246,17 +315,19 @@ async function mine() {
             onlyUser: true,
             userName: name1,
         });
+        const size = sizeNow();
         const p = prompts.buildMinePrompt({
             lang: concreteLang(),
+            size,
             name: personaName(),
             transcript,
             stats,
             sections: state.sections,
         });
         const keys = ['voice', 'samples', 'rules'];
-        const parsed = await askBlocks(p, keys, settings().otherTokens);
+        const parsed = await askBlocks(p, keys, settings().otherTokens, fmt(t.task_mine, { n: stats.count }));
         pushHistory();
-        for (const k of keys) if (parsed[k]) state.sections[k] = tidy(parsed[k]);
+        for (const k of keys) if (parsed[k]) state.sections[k] = tidy(core.fitLayer(k, parsed[k], size));
         state.mode = 'weave';
         toastr.success(fmt(t.mineDone, { n: stats.count }), t.title);
     });
@@ -279,13 +350,14 @@ async function evolve() {
         });
         if (!transcript) throw new Error(t.mineNoChat);
 
-        const p = prompts.buildEvolvePrompt({ lang: concreteLang(), name: personaName(), sections: base, transcript });
-        const raw = await callModel(p, settings().otherTokens);
+        const size = sizeNow();
+        const p = prompts.buildEvolvePrompt({ lang: concreteLang(), size, name: personaName(), sections: base, transcript });
+        const raw = await callModel(p, settings().otherTokens, t.task_evolve);
         const parsed = core.parseTagged(raw, [...SECTION_KEYS, 'summary']);
         if (!SECTION_KEYS.some(k => parsed[k]) && !parsed.summary) throw new Error(t.errFormat);
 
         const patch = {};
-        for (const k of SECTION_KEYS) if (parsed[k]) patch[k] = tidy(parsed[k]);
+        for (const k of SECTION_KEYS) if (parsed[k]) patch[k] = tidy(core.fitLayer(k, parsed[k], size));
         const changed = core.changedKeys(base, core.applyPatch(base, patch));
         state.evolve = {
             base,
@@ -529,6 +601,37 @@ function evolveBody(dis) {
 ${result}`;
 }
 
+function sourceSelectHtml(attrs) {
+    const t = ui();
+    const cur = api.resolveSource(settings().source);
+    const opts = api.sourceOptions(t.apiMain)
+        .map(o => `<option value="${esc(o.id)}" ${o.id === cur ? 'selected' : ''}>${esc(o.label)}</option>`)
+        .join('');
+    return `<select class="text_pole" ${attrs}>${opts}</select>`;
+}
+
+function sizeSelectHtml(attrs) {
+    const t = ui();
+    const cur = sizeNow();
+    const opts = Object.keys(core.SIZES)
+        .map(k => `<option value="${k}" ${k === cur ? 'selected' : ''}>${esc(fmt(t['size_' + k], { n: core.SIZES[k].tokens }))}</option>`)
+        .join('');
+    return `<select class="text_pole" ${attrs}>${opts}</select>`;
+}
+
+function apiBar(dis) {
+    const t = ui();
+    const last = state.lastCall
+        ? `<small class="pw-last">${esc(fmt(t.lastCall, { api: state.lastCall.label, s: (state.lastCall.ms / 1000).toFixed(1) }))}</small>`
+        : '';
+    return `
+<div class="pw-apibar">
+  <label class="pw-inline">${esc(t.apiLabel)} ${sourceSelectHtml(`data-field="source" ${dis}`)}</label>
+  <label class="pw-inline">${esc(t.sizeLabel)} ${sizeSelectHtml(`data-field="size" ${dis}`)}</label>
+  ${last}
+</div>`;
+}
+
 function layout() {
     const t = ui();
     const dis = state.busy ? 'disabled' : '';
@@ -540,17 +643,19 @@ function layout() {
     return `
 <div class="pw-panel" role="dialog" aria-modal="true" aria-label="${esc(t.title)}">
   <div class="pw-head">
-    <div class="pw-title"><i class="fa-solid fa-wand-magic-sparkles"></i> ${esc(t.title)}</div>
+    <div class="pw-title"><i class="fa-solid fa-wand-magic-sparkles"></i> ${esc(t.title)} <small class="pw-ver">v${VERSION}</small>${isStale() ? ` <button class="pw-stale" data-act="reloadNew" title="${esc(t.verReloadHint)}"><i class="fa-solid fa-circle-up"></i> v${esc(remoteVersion)}</button>` : ''}</div>
     <div class="pw-tabs">${tabs}</div>
     <button class="pw-x" data-act="close" title="${esc(t.close)}"><i class="fa-solid fa-xmark"></i></button>
   </div>
   <div class="pw-body">
-    ${state.busy ? `<div class="pw-busy"><i class="fa-solid fa-spinner fa-spin"></i> ${esc(t.busy)}</div>` : ''}
+    ${apiBar(dis)}
+    ${state.busy && state.sendingTo ? `<div class="pw-busy"><i class="fa-solid fa-spinner fa-spin"></i> ${esc(fmt(t.busyTo, { api: state.sendingTo }))}</div>` : ''}
     ${body}
     ${state.lastRaw ? `<details class="pw-raw"><summary>${esc(t.rawOutput)}</summary><pre>${esc(state.lastRaw)}</pre></details>` : ''}
   </div>
   <div class="pw-foot">
     <span id="pw_tokens" class="pw-tokens"></span>
+    <button class="menu_button" id="pw_condense" data-act="condense" title="${esc(t.condense)}" ${dis}><i class="fa-solid fa-compress"></i></button>
     <button class="menu_button" data-act="undo" title="${esc(t.undo)}" ${state.busy || !state.history.length ? 'disabled' : ''}><i class="fa-solid fa-rotate-left"></i></button>
     <button class="menu_button" data-act="copy" title="${esc(t.copy)}" ${dis}><i class="fa-regular fa-copy"></i></button>
     <button class="menu_button pw-primary" data-act="save" ${dis}><i class="fa-solid fa-floppy-disk"></i> ${esc(state.target === 'new' ? t.saveNew : t.saveActive)}</button>
@@ -569,23 +674,185 @@ function render() {
     refreshTokens();
 }
 
+async function countTokens(text) {
+    try {
+        return await getTokenCountAsync(text);
+    } catch {
+        return core.estimateTokens(text);
+    }
+}
+
 let tokenTimer = null;
 function refreshTokens() {
     clearTimeout(tokenTimer);
     tokenTimer = setTimeout(async () => {
         const el = document.getElementById('pw_tokens');
         if (!el) return;
-        const text = finalText();
-        let n;
-        try {
-            n = await getTokenCountAsync(text);
-        } catch {
-            n = core.estimateTokens(text);
-        }
+        const n = await countTokens(finalText());
+        state.tokenCount = n;
         const t = ui();
-        el.textContent = fmt(t.tokens, { n }) + (n > TOKEN_WARN ? ` · ${t.tokensWarn}` : '');
-        el.classList.toggle('pw-warn', n > TOKEN_WARN);
+        const max = budgetNow();
+        const over = n > max * BUDGET_SLACK;
+        el.textContent = fmt(t.tokens, { n, max }) + (over ? ` · ${t.tokensWarn}` : '');
+        el.classList.toggle('pw-warn', over);
+        document.getElementById('pw_condense')?.classList.toggle('pw-attn', n > max);
     }, 250);
+}
+
+// ---------------------------------------------------------------------------
+// Confirm before every request
+// ---------------------------------------------------------------------------
+
+/**
+ * Show what is about to be sent and where. Resolves to the chosen source id, or null.
+ * The API can be changed right here; the choice is saved as the new default.
+ */
+function confirmRequest({ task, p, maxTokens }) {
+    return new Promise((resolve) => {
+        const t = ui();
+        let src = api.resolveSource(settings().source);
+        const inTokens = core.estimateTokens(`${p.systemPrompt}\n${p.prompt}`);
+        document.getElementById('pw_confirm')?.remove();
+
+        const wrap = document.createElement('div');
+        wrap.id = 'pw_confirm';
+        wrap.innerHTML = `
+<div class="pw-confirm" role="alertdialog" aria-modal="true" aria-labelledby="pw_confirm_title">
+  <div class="pw-confirm-title" id="pw_confirm_title"><i class="fa-solid fa-paper-plane"></i> ${esc(t.confirmTitle)}</div>
+  <div class="pw-confirm-row"><small>${esc(t.confirmTask)}</small><b>${esc(task)}</b></div>
+  <label class="pw-confirm-row"><small>${esc(t.confirmApi)}</small>${sourceSelectHtml('data-c="src"')}</label>
+  <div class="pw-hint">${esc(fmt(t.confirmCost, { n: inTokens, m: maxTokens }))}</div>
+  <details class="pw-raw"><summary>${esc(t.confirmPrompt)}</summary><pre>${esc(`${p.systemPrompt}\n\n────────\n\n${p.prompt}`)}</pre></details>
+  <div class="pw-confirm-btns">
+    <button class="menu_button" data-c="no">${esc(t.confirmCancel)}</button>
+    <button class="menu_button pw-primary" data-c="ok"><i class="fa-solid fa-paper-plane"></i> ${esc(t.confirmOk)}</button>
+  </div>
+</div>`;
+
+        const finish = (value) => {
+            document.removeEventListener('keydown', onKeyConfirm, true);
+            wrap.remove();
+            resolve(value);
+        };
+        const onKeyConfirm = (e) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            finish(null);
+        };
+        wrap.addEventListener('change', (e) => {
+            if (e.target.dataset?.c !== 'src') return;
+            src = e.target.value;
+            settings().source = src;
+            saveSettingsDebounced();
+            syncSettingsApi();
+        });
+        wrap.addEventListener('click', (e) => {
+            const b = e.target.closest('[data-c]');
+            if (b?.dataset.c === 'ok') finish(src);
+            else if (b?.dataset.c === 'no' || e.target === wrap) finish(null);
+        });
+        document.addEventListener('keydown', onKeyConfirm, true);
+        document.body.appendChild(wrap);
+        wrap.querySelector('[data-c="ok"]')?.focus();
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Version check + hard refresh (same approach as Lore Master)
+//
+// SillyTavern loads extension files by a fixed URL, and browsers (and home-screen web apps
+// on iOS, which rarely reload for real) keep the old files cached after "Update". Compare
+// with the manifest on the server; if it is newer, say so, and offer to refetch every file
+// and reload. The open draft is parked in sessionStorage across that reload.
+// ---------------------------------------------------------------------------
+
+let remoteVersion = '';
+let versionCheckedAt = 0;
+let versionToastShown = false;
+
+function isStale() {
+    return Boolean(remoteVersion) && core.newerVersion(remoteVersion, VERSION);
+}
+
+async function fetchRemoteVersion() {
+    try {
+        const res = await fetch(new URL('manifest.json', BASE_URL), { cache: 'no-store' });
+        if (!res.ok) return '';
+        return String((await res.json())?.version ?? '');
+    } catch {
+        return '';
+    }
+}
+
+function remoteHtml() {
+    const t = ui();
+    if (!remoteVersion) return '';
+    return isStale()
+        ? `· <span class="pw-stale-text">${esc(fmt(t.verStale, { v: remoteVersion }))}</span>`
+        : `· ${esc(t.verLatest)}`;
+}
+
+function showRemote() {
+    document.querySelectorAll('[data-pw-remote]').forEach((el) => { el.innerHTML = remoteHtml(); });
+}
+
+async function checkForNewVersion(force = false) {
+    if (!force && Date.now() - versionCheckedAt < 10 * 60_000) return remoteVersion;
+    versionCheckedAt = Date.now();
+    const wasStale = isStale();
+    remoteVersion = await fetchRemoteVersion();
+    showRemote();
+    if (isStale() !== wasStale) render();
+    if (isStale() && !versionToastShown) {
+        versionToastShown = true;
+        const t = ui();
+        toastr.info(esc(fmt(t.verToast, { remote: remoteVersion, v: VERSION })), t.title, {
+            timeOut: 0, extendedTimeOut: 0, closeButton: true, escapeHtml: false, onclick: () => reloadWithFreshFiles(),
+        });
+    }
+    return remoteVersion;
+}
+
+function stashDraft() {
+    const hasWork = state.notes.trim() || state.name.trim() || hasSections() || state.lore.length;
+    if (!hasWork) return;
+    try {
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
+            mode: state.mode, target: state.target, name: state.name, notes: state.notes,
+            sections: state.sections, loreOn: state.loreOn, lore: state.lore, open: Boolean(document.getElementById('pw_overlay')),
+        }));
+    } catch { /* storage blocked: the draft is lost, the reload still works */ }
+}
+
+function restoreDraft() {
+    let draft = null;
+    try {
+        draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? 'null');
+        sessionStorage.removeItem(DRAFT_KEY);
+    } catch { return false; }
+    if (!draft || typeof draft !== 'object') return false;
+    state.mode = ['weave', 'mine', 'evolve'].includes(draft.mode) ? draft.mode : 'weave';
+    state.target = draft.target === 'active' ? 'active' : 'new';
+    state.name = String(draft.name ?? '');
+    state.notes = String(draft.notes ?? '');
+    state.sections = { ...core.emptySections(), ...(draft.sections ?? {}) };
+    state.loreOn = Boolean(draft.loreOn);
+    state.lore = Array.isArray(draft.lore) ? draft.lore : [];
+    return draft.open ? 'open' : true;
+}
+
+async function reloadWithFreshFiles() {
+    try {
+        stashDraft();
+        try { await saveSettings(); } catch { /* the debounced save may still land */ }
+        toastr.info(ui().verFetching, ui().title, { timeOut: 2000 });
+        // cache: 'reload' fetches from the server and overwrites the browser's cached copy,
+        // so the page reload below runs the new files.
+        await Promise.all(FILES.map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
+    } finally {
+        location.reload();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -604,6 +871,8 @@ function onClick(event) {
         case 'weaveAll': weave(SECTION_KEYS); return;
         case 'regen': weave([arg]); return;
         case 'loreGen': generateLore(); return;
+        case 'condense': condense(); return;
+        case 'reloadNew': reloadWithFreshFiles(); return;
         case 'loreRemove': pushHistory(); state.lore.splice(Number(arg), 1); render(); return;
         case 'mineRun': mine(); return;
         case 'evolveRun': evolve(); return;
@@ -644,6 +913,8 @@ function onChange(event) {
     } else if (field === 'selectAfter') state.selectAfter = el.checked;
     else if (field === 'useChar') { settings().useCharCard = el.checked; saveSettingsDebounced(); }
     else if (field === 'lang') { settings().lang = el.value; saveSettingsDebounced(); }
+    else if (field === 'source') { settings().source = el.value; saveSettingsDebounced(); syncSettingsApi(); return; }
+    else if (field === 'size') { settings().size = core.sizeKey(el.value); saveSettingsDebounced(); syncSettingsApi(); }
     else if (field === 'loreOn') state.loreOn = el.checked;
     else if (field.startsWith('accept:')) { if (state.evolve) state.evolve.accept[field.slice(7)] = el.checked; return; }
     else if (field === 'msgCount') { state.msgCount = Math.max(5, Math.min(200, Number(el.value) || DEFAULTS.messages)); render(); return; }
@@ -653,7 +924,9 @@ function onChange(event) {
 }
 
 function onKey(event) {
-    if (event.key === 'Escape' && document.getElementById('pw_overlay')) closeWeaver();
+    if (event.key !== 'Escape' || !document.getElementById('pw_overlay')) return;
+    if (document.getElementById('pw_confirm')) return;
+    closeWeaver();
 }
 
 function openWeaver() {
@@ -670,6 +943,7 @@ function openWeaver() {
     document.body.appendChild(root);
     document.addEventListener('keydown', onKey);
     render();
+    checkForNewVersion();
 }
 
 function closeWeaver() {
@@ -694,13 +968,17 @@ function mountSettings() {
     wrap.innerHTML = `
 <div class="inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
-    <b>${esc(t.title)}</b>
+    <b>${esc(t.title)} <small class="pw-ver">v${VERSION}</small></b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
   <div class="inline-drawer-content pw-settings">
     <label>${esc(t.setUiLang)}
       <select id="pw_set_ui" class="text_pole">${opt(s.uiLang, 'auto', t.langAuto)}${opt(s.uiLang, 'th', t.langTh)}${opt(s.uiLang, 'en', t.langEn)}</select>
     </label>
+    <label>${esc(t.setApi)}${sourceSelectHtml('id="pw_set_api"')}</label>
+    <small>${esc(t.apiHint)}</small>
+    <label>${esc(t.setSize)}${sizeSelectHtml('id="pw_set_size"')}</label>
+    <label>${esc(t.setTimeout)}<input id="pw_set_to" class="text_pole" type="number" min="15" max="600" step="15" value="${esc(s.timeoutSec)}"></label>
     <label>${esc(t.setLang)}
       <select id="pw_set_lang" class="text_pole">${opt(s.lang, 'auto', t.langAuto)}${opt(s.lang, 'th', t.langTh)}${opt(s.lang, 'en', t.langEn)}</select>
     </label>
@@ -709,7 +987,12 @@ function mountSettings() {
     <label>${esc(t.setWeaveTokens)}<input id="pw_set_wt" class="text_pole" type="number" min="300" max="8000" step="100" value="${esc(s.weaveTokens)}"></label>
     <label>${esc(t.setOtherTokens)}<input id="pw_set_ot" class="text_pole" type="number" min="300" max="8000" step="100" value="${esc(s.otherTokens)}"></label>
     <label>${esc(t.setMsgs)}<input id="pw_set_msgs" class="text_pole" type="number" min="5" max="200" step="5" value="${esc(s.messages)}"></label>
-    <div class="menu_button" id="pw_set_open">${esc(t.setOpen)}</div>
+    <div class="pw-verline">${esc(fmt(t.verRunning, { v: VERSION }))} <span data-pw-remote>${remoteHtml()}</span></div>
+    <div class="pw-set-btns">
+      <div class="menu_button" id="pw_set_open"><i class="fa-solid fa-wand-magic-sparkles"></i> ${esc(t.setOpen)}</div>
+      <div class="menu_button" id="pw_set_vcheck"><i class="fa-solid fa-magnifying-glass"></i> ${esc(t.verCheck)}</div>
+      <div class="menu_button" id="pw_set_reload" title="${esc(t.verReloadHint)}"><i class="fa-solid fa-rotate"></i> ${esc(t.verReload)}</div>
+    </div>
   </div>
 </div>`;
     host.appendChild(wrap);
@@ -723,6 +1006,20 @@ function mountSettings() {
     num('#pw_set_wt', 'weaveTokens', 300, 8000);
     num('#pw_set_ot', 'otherTokens', 300, 8000);
     num('#pw_set_msgs', 'messages', 5, 200);
+    num('#pw_set_to', 'timeoutSec', 15, 600);
+    const apiSel = wrap.querySelector('#pw_set_api');
+    // Profiles can be added while the page is open: rebuild the list whenever it is opened.
+    apiSel.addEventListener('focus', () => refillSourceSelect(apiSel));
+    apiSel.addEventListener('change', (e) => { settings().source = e.target.value; saveSettingsDebounced(); render(); });
+    wrap.querySelector('#pw_set_size').addEventListener('change', (e) => { settings().size = core.sizeKey(e.target.value); saveSettingsDebounced(); render(); });
+    wrap.querySelector('#pw_set_vcheck').addEventListener('click', async () => {
+        const t2 = ui();
+        const remote = await checkForNewVersion(true);
+        if (!remote) toastr.warning(t2.verUnknown, t2.title);
+        else if (isStale()) toastr.info(fmt(t2.verStale, { v: remote }), t2.title);
+        else toastr.success(fmt(t2.verSame, { v: VERSION }), t2.title);
+    });
+    wrap.querySelector('#pw_set_reload').addEventListener('click', reloadWithFreshFiles);
     wrap.querySelector('#pw_set_thai').addEventListener('change', (e) => { settings().thaiSpacing = e.target.checked; saveSettingsDebounced(); });
     wrap.querySelector('#pw_set_lang').addEventListener('change', (e) => { settings().lang = e.target.value; saveSettingsDebounced(); render(); });
     wrap.querySelector('#pw_set_ui').addEventListener('change', (e) => {
@@ -733,6 +1030,22 @@ function mountSettings() {
         render();
     });
     wrap.querySelector('#pw_set_open').addEventListener('click', openWeaver);
+}
+
+function refillSourceSelect(sel) {
+    const t = ui();
+    const cur = api.resolveSource(settings().source);
+    sel.innerHTML = api.sourceOptions(t.apiMain)
+        .map(o => `<option value="${esc(o.id)}" ${o.id === cur ? 'selected' : ''}>${esc(o.label)}</option>`)
+        .join('');
+}
+
+/** Keep the settings drawer in step after the API or size was changed elsewhere. */
+function syncSettingsApi() {
+    const sel = document.getElementById('pw_set_api');
+    if (sel) refillSourceSelect(sel);
+    const size = document.getElementById('pw_set_size');
+    if (size) size.value = sizeNow();
 }
 
 function mountMenu() {
@@ -767,7 +1080,19 @@ function registerSlashCommand() {
 
 jQuery(() => {
     settings();
+    const restored = restoreDraft();
     mountSettings();
     registerSlashCommand();
     if (!mountMenu()) eventSource.on(event_types.APP_READY, mountMenu);
+    if (restored) {
+        toastr.info(ui().draftRestored, ui().title, { timeOut: 4000 });
+        if (restored === 'open') {
+            let opened = false;
+            eventSource.on(event_types.APP_READY, () => { if (!opened) { opened = true; openWeaver(); } });
+        }
+    }
+    setTimeout(() => checkForNewVersion(), 3000);
+    eventSource.on(event_types.CHAT_CHANGED, () => checkForNewVersion());
+    globalThis.PersonaWeaver = { open: openWeaver, version: VERSION, remote: () => remoteVersion, isStale };
+    console.log(`[Persona Weaver] v${VERSION} ready`);
 });

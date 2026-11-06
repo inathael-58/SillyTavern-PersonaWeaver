@@ -4,8 +4,9 @@ import {
     SECTION_KEYS, emptySections, resolveLang, maskMacros, unmaskMacros, fixThaiNameSpacing,
     parseTagged, parseLore, splitKeys, assemblePersona, parsePersona, applyPatch, changedKeys,
     buildTranscript, styleStats, loreBookName, loreEntryFields, estimateTokens,
+    SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion,
 } from '../core.js';
-import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt } from '../prompts.js';
+import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs } from '../prompts.js';
 import { STRINGS, fmt, resolveUiLang } from '../i18n.js';
 
 test('i18n: every language has exactly the same keys, none empty, same placeholders', () => {
@@ -218,4 +219,67 @@ test('prompt builders mask macros, never leak live {{user}} and request the righ
 
     const l = buildLorePrompt({ lang: 'en', name: 'Kai', notes: 'n', sections: { core: 'c' } });
     assert.ok(l.prompt.includes('@@ENTRY'));
+});
+
+test('sizes: lean is the default, budgets grow, unknown falls back to lean', () => {
+    assert.equal(sizeKey('nope'), 'lean');
+    assert.equal(sizeKey(undefined), 'lean');
+    assert.equal(sizeKey('rich'), 'rich');
+    assert.ok(SIZES.lean.tokens < SIZES.standard.tokens && SIZES.standard.tokens < SIZES.rich.tokens);
+    for (const k of ['tension', 'samples', 'asymmetry', 'rules']) {
+        assert.ok(SIZES.lean.lines[k] <= SIZES.standard.lines[k] && SIZES.standard.lines[k] <= SIZES.rich.lines[k], k);
+    }
+    assert.equal(sizeSpec('x'), SIZES.lean);
+});
+
+test('capLines / fitLayer enforce the line caps on model output', () => {
+    assert.equal(capLines('a\n\n b\nc\nd', 2), 'a\n b');
+    assert.equal(capLines('a\nb', 0), 'a\nb');
+    const six = ['(angry) a', '(affectionate) b', '(lying) c', '(casual) d', '(embarrassed) e', 'extra'].join('\n');
+    assert.equal(fitLayer('samples', six, 'lean').split('\n').length, SIZES.lean.lines.samples);
+    assert.equal(fitLayer('samples', six, 'rich').split('\n').length, SIZES.rich.lines.samples);
+    assert.equal(fitLayer('core', '  one\n\ntwo  ', 'lean'), 'one\n\ntwo', 'prose layers are not cut by lines');
+});
+
+test('newerVersion compares numerically, not as text', () => {
+    assert.equal(newerVersion('0.10.0', '0.9.9'), true);
+    assert.equal(newerVersion('0.2.0', '0.2.0'), false);
+    assert.equal(newerVersion('0.2', '0.2.1'), false);
+    assert.equal(newerVersion('1.0.0', '0.99.99'), true);
+    assert.equal(newerVersion('', '0.1.0'), false);
+});
+
+test('prompts carry the size budget and the right line counts', () => {
+    for (const size of Object.keys(SIZES)) {
+        const spec = blockSpecs(size);
+        assert.ok(spec.samples.includes(`exactly ${SIZES[size].lines.samples} lines`), size);
+        assert.ok(spec.rules.includes(`exactly ${SIZES[size].lines.rules}`), size);
+        const w = buildWeavePrompt({ lang: 'en', size, name: 'Kai', notes: 'n', sections: {} });
+        assert.ok(w.prompt.includes(`under about ${SIZES[size].tokens} tokens`), size);
+    }
+    const lean = blockSpecs('lean').samples;
+    assert.ok(lean.includes('(angry)') && !lean.includes('(embarrassed)'), 'lean asks for fewer moods');
+    const m = buildMinePrompt({ lang: 'en', size: 'lean', name: 'K', transcript: 't', stats: { count: 3, medianChars: 1, avgChars: 1, shortPct: 0, questionPct: 0, exclaimPct: 0, ellipsisPct: 0, quotedSpeechPct: 0, actionMarkupPct: 0 } });
+    assert.ok(m.prompt.includes(`exactly ${SIZES.lean.lines.samples} lines`));
+});
+
+test('condense prompt asks only for the filled blocks and masks macros', () => {
+    const c = buildCondensePrompt({ lang: 'th', size: 'lean', name: 'Kai', sections: { core: 'หมอ {{user}}', samples: '(angry) พอ', voice: '' } });
+    assert.deepEqual(c.keys, ['core', 'samples']);
+    assert.ok(c.prompt.includes('<<CORE>>') && c.prompt.includes('<<SAMPLES>>') && !c.prompt.includes('<<VOICE>>'));
+    assert.ok(!/\{\{\s*(user|char)\s*\}\}/i.test(c.prompt));
+    assert.ok(c.prompt.includes(`${SIZES.lean.tokens} tokens`));
+});
+
+test('manifest and index.js agree on the version', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const m = index.match(/const VERSION = '([^']+)'/);
+    assert.ok(m, 'VERSION constant missing');
+    assert.equal(m[1], manifest.version);
+    const files = index.match(/const FILES = \[([^\]]+)\]/)[1];
+    for (const f of ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json']) {
+        assert.ok(files.includes(`'${f}'`), `${f} missing from FILES`);
+    }
 });
