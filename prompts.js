@@ -145,7 +145,7 @@ function notesText(notes, charCard, premise) {
  * @param {{name:string,text:string}} [p.charCard]
  * @param {string} [p.styleNotes] extra evidence, e.g. style statistics
  */
-export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes, sections, charCard, styleNotes, premise, gender, pronouns, withNames = false, worldNames = '', nameSource = 'mix' }) {
+export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes, sections, charCard, styleNotes, premise, gender, pronouns, nameInfo, withNames = false, worldNames = '', nameSource = 'mix' }) {
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const partial = keys.length < SECTION_KEYS.length;
     const specs = blockSpecs(size);
@@ -155,6 +155,8 @@ export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes,
     const id = identityBlock(gender, pronouns, lang);
     if (id) parts.push(id);
     if (hasPremise) parts.push(premiseBlock(premise));
+    const nib = nameInfoBlock(nameInfo);
+    if (nib) parts.push(nib);
     parts.push(`AUTHOR'S ROUGH NOTES (keep their facts; do not contradict):\n${notesText(notes, charCard, premise)}`);
     if (draft) {
         parts.push(hasPremise
@@ -173,6 +175,7 @@ export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes,
         + `${keys.map(k => specs[k]).join('\n')}\n`
         + `${keys.includes('core') && (gender || String(pronouns ?? '').trim()) ? 'CORE opens with [[user]]\'s gender and pronouns in a few words, so any AI reading the sheet uses them (e.g. "Woman, she/her." or "หญิง (เธอ)").\n' : ''}`
         + `${hasPremise ? 'Check before answering: every block you write must clearly come from the PREMISE.\n' : ''}`
+        + `${nib && (keys.includes('core') || keys.length > 1) ? `${NAME_IN_SHEET}\n` : ''}`
         + `${withNames ? `${namesSpec({ source: nameSource, hasWorld: Boolean(wb) })} The NAMES block does not count toward the size budget.\n` : ''}`
         + `\n${budgetLine(size)}\n\n`
         + `Output exactly this format and nothing else:\n${blockFormat(outKeys)}`,
@@ -190,13 +193,28 @@ function nameSourceRule(source, hasWorld) {
 
 /** Instructions for a NAMES block, shared by the weave prompt and the names-only prompt. */
 export function namesSpec({ source = 'mix', hasWorld = false, count = NAMES_PER_BATCH } = {}) {
-    return `NAMES: exactly ${count} name ideas for [[user]], one per line, as "Full name | what this name says about [[user]]". `
+    return `NAMES: exactly ${count} name ideas for [[user]], one per line, as "Full name | meaning | gimmick". `
         + 'A name is a status: give a given name plus family name, or whatever naming form this world uses (clan name, title, epithet, a single name with a byname). '
-        + 'Each must fit [[user]]\'s gender, the premise and the culture of [[char]]\'s world, and the note (at most 15 words) says what it signals in the story: old nobility, fallen house, commoner, foreigner, outcast, an alias that hides the truth, a name with a hidden meaning. Make them varied in status and in sound. '
-        + 'Never reuse [[char]]\'s own name; reuse a family or house from the world only as a deliberate story point and say so in the note. '
-        + 'Write each name in the script the setting uses (as the card and lorebook write names); write the note in the output language. '
+        + 'Every name must MEAN something: its real meaning in its language of origin, or an in-world meaning or wordplay that fits the setting. MEANING (at most 10 words) says what it means; when a family name carries the weight, say what the family name means. '
+        + 'GIMMICK (at most 20 words) turns that meaning into something playable for [[user]]: an irony between the name and the person, a habit or superstition, a power or a curse, how people react on hearing it, a nickname, the status it carries (old house, fallen house, commoner, foreigner, an alias hiding the truth). The gimmick must fit the premise. '
+        + 'Each name must fit [[user]]\'s gender and the culture of [[char]]\'s world. Make them varied in meaning, status and sound. '
+        + 'Never reuse [[char]]\'s own name; reuse a family or house from the world only as a deliberate story point and say so in the gimmick. '
+        + 'Write each name in the script the setting uses (as the card and lorebook write names); write meaning and gimmick in the output language. '
         + nameSourceRule(source, hasWorld);
 }
+
+/** The chosen name and its meaning, as part of who [[user]] is. */
+function nameInfoBlock(nameInfo) {
+    const n = String(nameInfo?.name ?? '').trim();
+    const meaning = String(nameInfo?.meaning ?? '').trim();
+    const gimmick = String(nameInfo?.gimmick ?? '').trim();
+    if (!n || (!meaning && !gimmick)) return '';
+    return `THE NAME (part of who [[user]] is): [[user]] is called "${maskMacros(n)}".`
+        + `${meaning ? ` It means: ${maskMacros(meaning)}.` : ''}`
+        + `${gimmick ? ` Gimmick: ${maskMacros(gimmick)}.` : ''}`;
+}
+
+const NAME_IN_SHEET = 'Let THE NAME show in the sheet: CORE names its meaning in a few words, and the gimmick appears in at least one of LOOK, TENSION, VOICE or SAMPLES (a habit, a line of dialogue, an irony). Say it once; never explain it twice.';
 
 function worldBlock(worldNames) {
     const w = String(worldNames ?? '').trim();
@@ -220,9 +238,48 @@ export function buildNamesPrompt({ lang, notes, sections, charCard, premise, gen
     if (seen.length) parts.push(`ALREADY SUGGESTED (do not repeat these or close variants):\n${seen.map(n => `- ${maskMacros(n)}`).join('\n')}`);
     parts.push(
         `${namesSpec({ source, hasWorld: Boolean(wb) })}\n\n`
-        + 'Output exactly this format and nothing else:\n<<NAMES>>\nFull name | note\n<</NAMES>>',
+        + 'Output exactly this format and nothing else:\n<<NAMES>>\nFull name | meaning | gimmick\n<</NAMES>>',
     );
     return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };
+}
+
+/** Meaning and gimmick for a name the author typed themselves. */
+export function buildNameMeaningPrompt({ lang, name, notes, sections, charCard, premise, gender, pronouns }) {
+    const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
+    const parts = [`THE NAME: ${maskMacros(name)}`];
+    const id = identityBlock(gender, pronouns, lang);
+    if (id) parts.push(id);
+    if (String(premise ?? '').trim()) parts.push(premiseBlock(premise));
+    if (String(notes ?? '').trim()) parts.push(`AUTHOR'S NOTES:\n${maskMacros(notes)}`);
+    if (draft) parts.push(`PERSONA SHEET:\n${maskMacros(draft)}`);
+    const cc = charBlock(charCard, premise);
+    if (cc) parts.push(cc);
+    parts.push(
+        'Give the meaning of THE NAME and a gimmick for [[user]]. MEANING (at most 10 words): its real meaning in its language of origin; if it has none, a plausible meaning inside this setting, or wordplay, and say which. '
+        + 'GIMMICK (at most 20 words): how that meaning becomes something playable for [[user]] (an irony, a habit or superstition, a power or curse, how others react, a nickname, the status it carries). It must fit the premise and the persona. '
+        + 'Write meaning and gimmick in the output language; keep the name exactly as given.\n\n'
+        + 'Output exactly this format and nothing else:\n<<MEANING>>\nName | meaning | gimmick\n<</MEANING>>',
+    );
+    return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };
+}
+
+/** Name gimmick: work the chosen name's meaning into a sheet that is already written. */
+export function buildNameGimmickPrompt({ lang, size, name, sections, nameInfo, premise, gender, pronouns }) {
+    const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
+    const specs = blockSpecs(size);
+    const parts = [`PERSONA NAME: ${maskMacros(name || nameInfo?.name || '(unnamed)')}`];
+    const id = identityBlock(gender, pronouns, lang);
+    if (id) parts.push(id);
+    if (String(premise ?? '').trim()) parts.push(`PREMISE (stay true to it):\n${maskMacros(premise)}`);
+    parts.push(nameInfoBlock(nameInfo));
+    parts.push(`CURRENT PERSONA SHEET:\n${maskMacros(draft)}`);
+    parts.push(
+        'Work THE NAME into the sheet as a gimmick. Rewrite ONLY the blocks it needs, at most three: CORE always (name the meaning in a few words), then the one or two of LOOK, TENSION, VOICE or SAMPLES where the gimmick plays best. Keep every other fact; replace weaker detail instead of adding, so the sheet stays about the same size. Do not output blocks you did not change.\n'
+        + `Block formats:\n${['core', 'look', 'tension', 'voice', 'samples'].map(k => specs[k]).join('\n')}\n\n`
+        + `${budgetLine(size)}\n\n`
+        + 'Output only the changed blocks, in this format:\n<<CORE>>\n(core content)\n<</CORE>>\n<<SAMPLES>>\n(only if changed)\n<</SAMPLES>>',
+    );
+    return { systemPrompt: systemFor(lang), prompt: parts.filter(Boolean).join('\n\n') };
 }
 
 /** Directions for unexpected ideas. The model picks different ones for each wild idea. */
@@ -270,7 +327,7 @@ export function buildIdeasPrompt({ lang, notes, charCard, mix = 'mix', avoid = [
 }
 
 /** Condense: rewrite every filled block so the whole sheet fits the size budget. */
-export function buildCondensePrompt({ lang, size, name, sections, premise, gender, pronouns }) {
+export function buildCondensePrompt({ lang, size, name, sections, premise, gender, pronouns, nameInfo }) {
     const keys = SECTION_KEYS.filter(k => String(sections?.[k] ?? '').trim());
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const specs = blockSpecs(size);
@@ -278,6 +335,7 @@ export function buildCondensePrompt({ lang, size, name, sections, premise, gende
         `PERSONA NAME: ${maskMacros(name || '(unnamed)')}`,
         identityBlock(gender, pronouns, lang),
         String(premise ?? '').trim() ? `PREMISE (keep it intact while cutting):\n${maskMacros(premise)}` : '',
+        nameInfoBlock(nameInfo) ? `${nameInfoBlock(nameInfo)} Keep the name's meaning and gimmick while cutting.` : '',
         `CURRENT PERSONA SHEET (too long):\n${maskMacros(draft)}`,
         'Rewrite every block below so the sheet becomes much shorter. Keep every fact that changes how [[user]] acts or speaks; merge duplicates across blocks; drop flourish, filler and anything generic. Keep the author\'s strongest exact lines in SAMPLES. Do not add anything new.\n\n'
         + `${keys.map(k => specs[k]).join('\n')}\n\n`
@@ -330,7 +388,7 @@ export function buildEvolvePrompt({ lang, size, name, sections, transcript, gend
 }
 
 /** Lore: move backstory and secrets out of the always-on persona into keyword-triggered entries. */
-export function buildLorePrompt({ lang, size, name, notes, sections, charCard, premise, gender, pronouns }) {
+export function buildLorePrompt({ lang, size, name, notes, sections, charCard, premise, gender, pronouns, nameInfo }) {
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const words = { lean: '30-70', standard: '40-90', rich: '50-120' }[size] ?? '30-70';
     const hasPremise = Boolean(String(premise ?? '').trim());
@@ -338,6 +396,8 @@ export function buildLorePrompt({ lang, size, name, notes, sections, charCard, p
     const id = identityBlock(gender, pronouns, lang);
     if (id) parts.push(id);
     if (hasPremise) parts.push(premiseBlock(premise));
+    const nib = nameInfoBlock(nameInfo);
+    if (nib) parts.push(`${nib}\nOne entry may tell where the name comes from: who gave it, why, and what it costs [[user]].`);
     parts.push(`AUTHOR'S ROUGH NOTES:\n${notesText(notes, null, premise)}`);
     if (draft) parts.push(`CURRENT PERSONA SHEET (always in the prompt, so do not repeat its content, but every entry must agree with it${hasPremise ? ' and with the PREMISE; if they disagree, the premise wins' : ''}):\n${maskMacros(draft)}`);
     const cc = charBlock(charCard, premise);

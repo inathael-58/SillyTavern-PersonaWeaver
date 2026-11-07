@@ -811,6 +811,44 @@
     cursor: default;
 }
 
+#pw_overlay .pw-name-meaning {
+    font-size: 0.82em;
+    font-style: italic;
+    color: var(--SmartThemeQuoteColor, #9b8cff);
+}
+
+#pw_overlay .pw-meaning {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px dashed color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 55%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 6%, transparent);
+}
+
+#pw_overlay .pw-meaning-empty {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+#pw_overlay .pw-meaning-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+#pw_overlay .pw-meaning-row small {
+    opacity: 0.7;
+}
+
+#pw_overlay .pw-meaning-row .text_pole {
+    width: 100%;
+    box-sizing: border-box;
+}
+
 /* layers as light cards */
 
 #pw_overlay .pw-sec {

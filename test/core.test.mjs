@@ -7,7 +7,7 @@ import {
     SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion, parseIdeas, mergeIdeas, ideaSplit, LABELS,
     parseNameLines, mergeNames, worldNameList, NAMES_PER_BATCH,
 } from '../core.js';
-import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt, genderRule, buildNamesPrompt } from '../prompts.js';
+import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt, genderRule, buildNamesPrompt, buildNameMeaningPrompt, buildNameGimmickPrompt } from '../prompts.js';
 import { STRINGS, fmt, resolveUiLang } from '../i18n.js';
 
 test('i18n: every language has exactly the same keys, none empty, same placeholders', () => {
@@ -411,11 +411,14 @@ test('gender reaches every prompt that writes about the persona', () => {
     assert.ok(!buildEvolvePrompt({ lang: 'en', name: 'K', sections: { core: 'c' }, transcript: 't' }).prompt.includes('\n\n\n'), 'no blank block when unset');
 });
 
-test('parseNameLines reads "name | note", other separators, bullets, and drops repeats and junk', () => {
-    const out = parseNameLines('<<NAMES>>\n1. **Layla Vane** | fallen house\n- Zayn al-Ashkar — alias\nNoor - slave name\nlayla vane | dup\n\n' + 'x'.repeat(70) + '\nสุริยา ศรีวังเดิม | ราชสกุลเก่า');
+test('parseNameLines reads "name | meaning | gimmick", two-field and dash forms, bullets, and drops repeats and junk', () => {
+    const out = parseNameLines('<<NAMES>>\n1. **Layla Vane** | night | born the night her house fell\n- Zayn al-Ashkar — alias\nNoor - slave name\nlayla vane | dup | x\n\n' + 'x'.repeat(70) + '\nสุริยา ศรีวังเดิม | ราชสกุลเก่า');
     assert.deepEqual(out.map(n => n.name), ['Layla Vane', 'Zayn al-Ashkar', 'Noor', 'สุริยา ศรีวังเดิม']);
-    assert.equal(out[0].note, 'fallen house');
-    assert.equal(parseNameLines('Just A Name')[0].note, '');
+    assert.deepEqual(out[0], { name: 'Layla Vane', meaning: 'night', hook: 'born the night her house fell' });
+    assert.deepEqual(out[1], { name: 'Zayn al-Ashkar', meaning: '', hook: 'alias' });
+    assert.equal(out[3].hook, 'ราชสกุลเก่า');
+    assert.deepEqual(parseNameLines('Just A Name')[0], { name: 'Just A Name', meaning: '', hook: '' });
+    assert.equal(parseNameLines('Noor | light | glows | when lying')[0].hook, 'glows | when lying');
     assert.deepEqual(mergeNames(out.slice(0, 1), [{ name: 'LAYLA VANE', note: '' }, { name: 'Karim', note: 'n' }]).map(n => n.name), ['Layla Vane', 'Karim']);
 });
 
@@ -445,4 +448,27 @@ test('names prompt: source rules, world list, avoid list, gender; weave adds NAM
     const w2 = buildWeavePrompt({ lang: 'en', name: '', notes: 'n', sections: {}, withNames: true, worldNames: 'Ashkar', nameSource: 'mix' });
     assert.ok(w2.prompt.includes('<<NAMES>>') && w2.prompt.includes('About half should draw on') && w2.prompt.includes('does not count toward the size budget'));
     assert.ok(!/\{\{\s*(user|char)\s*\}\}/i.test(w2.prompt + world.prompt));
+});
+
+test('names ask for a meaning and a gimmick; the chosen name reaches weave, lore and condense', () => {
+    const n = buildNamesPrompt({ lang: 'en', notes: 'n', sections: {}, source: 'new' });
+    assert.ok(n.prompt.includes('"Full name | meaning | gimmick"') && n.prompt.includes('Every name must MEAN something'));
+    const ni = { name: 'Noor', meaning: 'light', gimmick: 'glows faintly when {{user}} lies' };
+    const w = buildWeavePrompt({ lang: 'en', name: 'Noor', notes: 'n', sections: {}, nameInfo: ni });
+    assert.ok(w.prompt.includes('THE NAME') && w.prompt.includes('It means: light') && w.prompt.includes('glows faintly when [[user]] lies'));
+    assert.ok(w.prompt.includes('CORE names its meaning'));
+    const one = buildWeavePrompt({ keys: ['rules'], lang: 'en', name: 'Noor', notes: 'n', sections: {}, nameInfo: ni });
+    assert.ok(!one.prompt.includes('CORE names its meaning'), 'single non-core layer is not forced to carry it');
+    assert.ok(!buildWeavePrompt({ lang: 'en', name: 'Noor', notes: 'n', sections: {}, nameInfo: { name: 'Noor', meaning: '', gimmick: '' } }).prompt.includes('THE NAME'));
+    assert.ok(buildLorePrompt({ lang: 'en', name: 'Noor', notes: 'n', sections: {}, nameInfo: ni }).prompt.includes('where the name comes from'));
+    assert.ok(buildCondensePrompt({ lang: 'en', name: 'Noor', sections: { core: 'c' }, nameInfo: ni }).prompt.includes("Keep the name's meaning"));
+});
+
+test('name meaning and gimmick prompts', () => {
+    const m = buildNameMeaningPrompt({ lang: 'th', name: 'นภา {{char}}', sections: {}, gender: 'female' });
+    assert.ok(m.prompt.includes('<<MEANING>>') && m.prompt.includes('Name | meaning | gimmick') && m.prompt.includes('FEMALE'));
+    assert.ok(!/\{\{/.test(m.prompt));
+    const g = buildNameGimmickPrompt({ lang: 'en', size: 'lean', name: 'Noor', sections: { core: 'A djinn.', samples: '(angry) no' }, nameInfo: { name: 'Noor', meaning: 'light', gimmick: 'glows' } });
+    assert.ok(g.prompt.includes('at most three') && g.prompt.includes('CORE always') && g.prompt.includes('A djinn.'));
+    assert.ok(g.prompt.includes('at most 30 words'), 'carries the size limits');
 });

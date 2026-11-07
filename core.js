@@ -256,23 +256,39 @@ export const NAMES_PER_BATCH = 8;
 const MAX_NAMES = 24;
 
 /**
- * Read name suggestions, one per line: `Full name | what it says about status`.
- * Also accepts an em dash or " - " as the separator, list bullets and numbering.
+ * Read name suggestions, one per line: `Full name | meaning | gimmick`.
+ * Two fields (`Full name | gimmick`) and an em dash or " - " separator are accepted too,
+ * as are list bullets, numbering and bold.
  */
 export function parseNameLines(text) {
     const out = [];
     const seen = new Set();
+    const clean = v => String(v ?? '').replace(/^\*\*|\*\*$/g, '').replace(/^["“'‘]+|["”'’]+$/g, '').trim();
     for (const raw of String(text ?? '').replace(/\r\n/g, '\n').split('\n')) {
         const line = raw.trim().replace(/^(?:[-•*]|\d+[.)])\s*/, '').replace(/^\*\*(.+?)\*\*/, '$1');
         if (!line || /^<<|^@@/.test(line)) continue;
-        const m = line.match(/^(.+?)\s*(?:\||—|–|\s-\s)\s*(.*)$/);
-        const name = (m ? m[1] : line).replace(/^["“'‘]+|["”'’]+$/g, '').trim();
-        const note = (m ? m[2] : '').trim();
+        let name;
+        let meaning = '';
+        let hook = '';
+        if (line.includes('|')) {
+            const parts = line.split('|').map(clean);
+            name = parts[0];
+            if (parts.length >= 3) {
+                meaning = parts[1];
+                hook = parts.slice(2).filter(Boolean).join(' | ');
+            } else {
+                hook = parts[1] ?? '';
+            }
+        } else {
+            const m = line.match(/^(.+?)\s*(?:—|–|\s-\s)\s*(.*)$/);
+            name = clean(m ? m[1] : line);
+            hook = clean(m ? m[2] : '');
+        }
         if (!name || name.length > 60) continue;
         const id = name.toLowerCase();
         if (seen.has(id)) continue;
         seen.add(id);
-        out.push({ name, note });
+        out.push({ name, meaning, hook });
     }
     return out.slice(0, MAX_NAMES);
 }
