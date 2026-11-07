@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.6.0'; // keep in sync with manifest.json
+const VERSION = '0.7.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -83,7 +83,8 @@ const state = {
     ideas: [],
     premise: '', // the chosen idea(s): the foundation every prompt builds on
     gender: '', // '' | 'female' | 'male' | 'nonbinary'
-    names: [], // [{ name, note }] suggestions; tapping one fills the name field
+    names: [], // [{ name, meaning, hook }] suggestions; tapping one fills the name field
+    nameInfo: null, // { name, meaning, gimmick } for the chosen name
     collapsed: {}, // step key -> true when the user folded that step
     pronouns: '', // optional free text, e.g. "she/her" or "ข้า/เจ้า"
 
@@ -170,9 +171,21 @@ function isFreshChat() {
     return !core.styleStats(chat);
 }
 
-/** Premise, gender and pronouns, passed to every prompt builder. */
+/** The name the persona will carry: the typed one for a new persona, the active one otherwise. */
+function currentPersonaName() {
+    return state.target === 'new' ? state.name.trim() : String(name1 ?? '').trim();
+}
+
+/** The meaning and gimmick of the current name, if any were chosen or written. */
+function activeNameInfo() {
+    const ni = state.nameInfo;
+    if (!ni || !ni.name || ni.name !== currentPersonaName()) return null;
+    return String(ni.meaning ?? '').trim() || String(ni.gimmick ?? '').trim() ? ni : null;
+}
+
+/** Premise, gender, pronouns and the name's meaning, passed to every prompt builder. */
 function identity() {
-    return { premise: state.premise, gender: state.gender, pronouns: state.pronouns };
+    return { premise: state.premise, gender: state.gender, pronouns: state.pronouns, nameInfo: activeNameInfo() };
 }
 
 function hasSections(sections = state.sections) {
@@ -374,6 +387,47 @@ function pickName(i) {
     const n = state.names[i];
     if (!n) return;
     state.name = n.name;
+    state.nameInfo = { name: n.name, meaning: n.meaning ?? '', gimmick: n.hook ?? n.note ?? '' };
+}
+
+/** Meaning and gimmick for a name the author typed (or the active persona's name). */
+async function explainName() {
+    await run(async () => {
+        const t = ui();
+        const name = currentPersonaName();
+        if (!name) throw new Error(t.needName);
+        const p = prompts.buildNameMeaningPrompt({
+            lang: concreteLang(), name, notes: state.notes, sections: state.sections, charCard: currentCharCard(),
+            premise: state.premise, gender: state.gender, pronouns: state.pronouns,
+        });
+        const raw = await callModel(p, settings().otherTokens, fmt(t.task_nameMeaning, { name }));
+        const block = core.parseTagged(raw, ['meaning']).meaning ?? raw;
+        const found = core.parseNameLines(tidy(block))[0];
+        if (!found || (!found.meaning && !found.hook)) throw new Error(t.errFormat);
+        state.nameInfo = { name, meaning: found.meaning, gimmick: found.hook };
+    });
+}
+
+/** Patch the 1-3 layers that should carry the name's meaning, without re-weaving. */
+async function applyNameGimmick() {
+    await run(async () => {
+        const t = ui();
+        const ni = activeNameInfo();
+        if (!ni) throw new Error(t.nameNoMeaning);
+        if (!hasSections()) throw new Error(t.nameNeedWeave);
+        const size = sizeNow();
+        const p = prompts.buildNameGimmickPrompt({
+            lang: concreteLang(), size, name: currentPersonaName(), sections: state.sections, nameInfo: ni,
+            premise: state.premise, gender: state.gender, pronouns: state.pronouns,
+        });
+        const parsed = await askBlocks(p, SECTION_KEYS, settings().otherTokens, fmt(t.task_nameGimmick, { name: ni.name }));
+        const patch = {};
+        for (const k of SECTION_KEYS) if (parsed[k]) patch[k] = tidy(core.fitLayer(k, parsed[k], size));
+        const changed = core.changedKeys(state.sections, core.applyPatch(state.sections, patch));
+        pushHistory();
+        state.sections = core.applyPatch(state.sections, patch);
+        toastr.success(fmt(t.nameApplied, { layers: changed.map(k => t['sec_' + k]).join(', ') || '-' }), t.title);
+    });
 }
 
 async function suggestIdeas(more = false) {
@@ -771,10 +825,52 @@ function targetSwitch(dis) {
 ${state.target === 'active' ? `<button class="menu_button pw-mini" data-act="loadActive" ${dis}><i class="fa-solid fa-file-import"></i> ${esc(t.loadActive)}</button>` : ''}`;
 }
 
+/** The chosen name's meaning and gimmick: editable, and can be worked into the layers. */
+function meaningCard(dis) {
+    const t = ui();
+    const name = currentPersonaName();
+    if (!name) return '';
+    const ni = state.nameInfo && state.nameInfo.name === name ? state.nameInfo : null;
+    if (!ni) {
+        return `
+<div class="pw-meaning pw-meaning-empty">
+  <span class="pw-hint"><i class="fa-solid fa-scroll"></i> ${esc(t.nameMeaningNone)}</span>
+  <button class="menu_button pw-mini" data-act="explainName" ${dis}><i class="fa-solid fa-wand-sparkles"></i> ${esc(t.nameExplain)}</button>
+</div>`;
+    }
+    return `
+<div class="pw-meaning">
+  <span class="pw-field-label"><i class="fa-solid fa-scroll"></i> ${esc(fmt(t.nameMeaningTitle, { name }))}</span>
+  <label class="pw-meaning-row"><small>${esc(t.nameMeaningLabel)}</small>
+    <input class="text_pole" data-field="nameMeaning" value="${esc(ni.meaning)}" ${dis}>
+  </label>
+  <label class="pw-meaning-row"><small>${esc(t.nameGimmickLabel)}</small>
+    <textarea class="text_pole" rows="2" data-field="nameGimmick" ${dis}>${esc(ni.gimmick)}</textarea>
+  </label>
+  <div class="pw-row">
+    <button class="menu_button" data-act="applyGimmick" ${dis} ${hasSections() ? '' : 'disabled'}><i class="fa-solid fa-feather-pointed"></i> ${esc(t.nameApply)}</button>
+    <button class="menu_button pw-mini" data-act="explainName" ${dis} title="${esc(t.nameExplainAgain)}"><i class="fa-solid fa-rotate"></i></button>
+  </div>
+  <small class="pw-hint">${esc(hasSections() ? t.nameApplyHint : t.nameApplyLater)}</small>
+</div>`;
+}
+
+/** Swap only the meaning card while the name is typed, so focus and the next tap are not lost. */
+function refreshMeaningCard() {
+    const old = document.querySelector('#pw_overlay .pw-meaning');
+    const html = meaningCard(state.busy ? 'disabled' : '');
+    if (old) {
+        if (html) old.outerHTML = html;
+        else old.remove();
+    } else if (html) {
+        document.querySelector('#pw_overlay .pw-names, #pw_overlay .pw-namerow + .pw-row')?.insertAdjacentHTML('afterend', html);
+    }
+}
+
 function nameBlock(dis) {
     const t = ui();
     if (state.target !== 'new') {
-        return `<div class="pw-field"><span class="pw-field-label">${esc(t.nameLabel)}</span><div class="pw-namefixed">${esc(name1)}</div><small class="pw-hint">${esc(t.nameActiveHint)}</small></div>`;
+        return `<div class="pw-field"><span class="pw-field-label">${esc(t.nameLabel)}</span><div class="pw-namefixed">${esc(name1)}</div><small class="pw-hint">${esc(t.nameActiveHint)}</small>${meaningCard(dis)}</div>`;
     }
     const src = nameSource();
     const srcOpts = core.NAME_SOURCES
@@ -782,7 +878,9 @@ function nameBlock(dis) {
         .join('');
     const chips = state.names.map((n, i) => `
 <button class="pw-name ${n.name === state.name.trim() ? 'on' : ''}" data-act="pickName:${i}" ${dis} title="${esc(t.namePick)}">
-  <b>${esc(n.name)}</b>${n.note ? `<small>${esc(n.note)}</small>` : ''}
+  <b>${esc(n.name)}</b>
+  ${n.meaning ? `<span class="pw-name-meaning">“${esc(n.meaning)}”</span>` : ''}
+  ${n.hook || n.note ? `<small>${esc(n.hook || n.note)}</small>` : ''}
 </button>`).join('');
     return `
 <div class="pw-field">
@@ -796,6 +894,7 @@ function nameBlock(dis) {
     <label class="pw-check"><input type="checkbox" data-field="namesWithWeave" ${settings().namesWithWeave ? 'checked' : ''} ${dis}> ${esc(t.nameWithWeave)}</label>
   </div>
   ${state.names.length ? `<div class="pw-names">${chips}</div>` : ''}
+  ${meaningCard(dis)}
   <label class="pw-check pw-small"><input type="checkbox" data-field="selectAfter" ${state.selectAfter ? 'checked' : ''}> ${esc(t.selectAfter)}</label>
 </div>`;
 }
@@ -1112,7 +1211,7 @@ function stashDraft() {
     try {
         sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
             mode: state.mode, target: state.target, name: state.name, notes: state.notes,
-            premise: state.premise, gender: state.gender, pronouns: state.pronouns, names: state.names,
+            premise: state.premise, gender: state.gender, pronouns: state.pronouns, names: state.names, nameInfo: state.nameInfo,
             sections: state.sections, loreOn: state.loreOn, lore: state.lore, charSel: state.charSel, ideas: state.ideas, open: Boolean(document.getElementById('pw_overlay')),
         }));
     } catch { /* storage blocked: the draft is lost, the reload still works */ }
@@ -1133,6 +1232,7 @@ function restoreDraft() {
     state.gender = ['female', 'male', 'nonbinary'].includes(draft.gender) ? draft.gender : '';
     state.pronouns = String(draft.pronouns ?? '');
     state.names = Array.isArray(draft.names) ? draft.names : [];
+    state.nameInfo = draft.nameInfo && typeof draft.nameInfo === 'object' ? draft.nameInfo : null;
     state.sections = { ...core.emptySections(), ...(draft.sections ?? {}) };
     state.loreOn = Boolean(draft.loreOn);
     state.lore = Array.isArray(draft.lore) ? draft.lore : [];
@@ -1175,6 +1275,8 @@ function onClick(event) {
         case 'ideasClear': state.ideas = []; render(); return;
         case 'names': suggestNames(state.names.length > 0); return;
         case 'pickName': pickName(Number(arg)); render(); return;
+        case 'explainName': explainName(); return;
+        case 'applyGimmick': applyNameGimmick(); return;
         case 'premiseClear':
             state.premise = '';
             state.ideas.forEach((idea) => { idea.used = false; });
@@ -1199,9 +1301,17 @@ function onInput(event) {
     const field = el.dataset?.field;
     if (!field) return;
 
-    if (field === 'name') state.name = el.value;
+    if (field === 'name') {
+        state.name = el.value;
+        refreshMeaningCard();
+    }
     else if (field === 'notes') state.notes = el.value;
     else if (field === 'premise') state.premise = el.value;
+    else if (field === 'nameMeaning' || field === 'nameGimmick') {
+        const name = currentPersonaName();
+        if (!state.nameInfo || state.nameInfo.name !== name) state.nameInfo = { name, meaning: '', gimmick: '' };
+        state.nameInfo[field === 'nameMeaning' ? 'meaning' : 'gimmick'] = el.value;
+    }
     else if (field === 'pronouns') state.pronouns = el.value;
     else if (field === 'msgCount') state.msgCount = Math.max(5, Math.min(200, Number(el.value) || DEFAULTS.messages));
     else if (field.startsWith('sec:')) state.sections[field.slice(4)] = el.value;
