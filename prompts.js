@@ -169,7 +169,7 @@ function notesText(notes, charCard, premise) {
  * @param {{name:string,text:string}} [p.charCard]
  * @param {string} [p.styleNotes] extra evidence, e.g. style statistics
  */
-export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes, sections, charCard, styleNotes, premise, gender, pronouns, nameInfo, withNames = false, worldNames = '', nameSource = 'mix' }) {
+export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes, sections, charCard, styleNotes, premise, gender, pronouns, nameInfo, withNames = false, worldNames = '', nameSource = 'mix', nameScript = '' }) {
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const partial = keys.length < SECTION_KEYS.length;
     const specs = blockSpecs(size);
@@ -200,7 +200,7 @@ export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes,
         + `${keys.includes('core') && (gender || String(pronouns ?? '').trim()) ? 'CORE opens with [[user]]\'s gender and pronouns in a few words, so any AI reading the sheet uses them (e.g. "Woman, she/her." or "หญิง (เธอ)").\n' : ''}`
         + `${hasPremise ? 'Check before answering: every block you write must clearly come from the PREMISE.\n' : ''}`
         + `${nib && (keys.includes('core') || keys.length > 1) ? `${NAME_IN_SHEET}\n` : ''}`
-        + `${withNames ? `${namesSpec({ source: nameSource, hasWorld: Boolean(wb) })} The NAMES block does not count toward the size budget.\n` : ''}`
+        + `${withNames ? `${namesSpec({ source: nameSource, hasWorld: Boolean(wb), script: nameScript, example: charCard?.name })} The NAMES block does not count toward the size budget.\n` : ''}`
         + `\n${budgetLine(size)}\n\n`
         + `Output exactly this format and nothing else:\n${blockFormat(outKeys)}`,
     );
@@ -216,7 +216,18 @@ function nameSourceRule(source, hasWorld) {
 }
 
 /** Instructions for a NAMES block, shared by the weave prompt and the names-only prompt. */
-export function namesSpec({ source = 'mix', hasWorld = false, count = NAMES_PER_BATCH } = {}) {
+const SCRIPT_NAMES = { latin: 'Latin letters', thai: 'Thai script', cjk: 'the Chinese, Japanese or Korean characters the card uses' };
+
+/** A hard rule on the script of every suggested name, from the bot's own name. */
+export function nameScriptRule(script, example = '') {
+    const label = SCRIPT_NAMES[script];
+    if (!label) return '';
+    const ex = String(example ?? '').trim();
+    return `NAME SCRIPT: [[char]]'s world writes names in ${label}${ex ? ` (like "${maskMacros(ex)}")` : ''}. Write EVERY name in ${label}, as a real name from that culture, even when the author's notes or the output language use another script. A name in any other script is wrong.`;
+}
+
+export function namesSpec({ source = 'mix', hasWorld = false, count = NAMES_PER_BATCH, script = '', example = '' } = {}) {
+    const scriptRule = nameScriptRule(script, example);
     return `NAMES: exactly ${count} name ideas for [[user]], one per line, as "Full name | meaning | gimmick". `
         + 'A name is a status: give a given name plus family name, or whatever naming form this world uses (clan name, title, epithet, a single name with a byname). '
         + 'Every name must MEAN something: its real meaning in its language of origin, or an in-world meaning or wordplay that fits the setting. MEANING (at most 10 words) says what it means; when a family name carries the weight, say what the family name means. '
@@ -224,7 +235,8 @@ export function namesSpec({ source = 'mix', hasWorld = false, count = NAMES_PER_
         + 'Each name must fit [[user]]\'s gender and the culture of [[char]]\'s world. Make them varied in meaning, status and sound. '
         + 'Never reuse [[char]]\'s own name or the name of a character already in the world; reuse a family or house only as a deliberate story point and say so in the gimmick. If the card fixes [[user]]\'s role, every name fits that role\'s origin and standing. '
         + 'The culture, sound and script of every name come from [[char]]\'s world (as the card and lorebook write names), NEVER from the output language or the language of the author\'s notes: a Western setting gets Western names in Latin letters even when everything else is written in Thai; a Thai setting gets Thai names in Thai script. Only meaning and gimmick are written in the output language. '
-        + nameSourceRule(source, hasWorld);
+        + nameSourceRule(source, hasWorld)
+        + (scriptRule ? ` ${scriptRule}` : '');
 }
 
 /** The chosen name and its meaning, as part of who [[user]] is. */
@@ -246,7 +258,7 @@ function worldBlock(worldNames) {
 }
 
 /** Names only: suggestions for the persona's name, without rewriting anything else. */
-export function buildNamesPrompt({ lang, notes, sections, charCard, premise, gender, pronouns, worldNames, source = 'mix', avoid = [] }) {
+export function buildNamesPrompt({ lang, notes, sections, charCard, premise, gender, pronouns, worldNames, source = 'mix', avoid = [], nameScript = '' }) {
     const draft = draftText(sections, lang === 'auto' ? 'en' : lang);
     const parts = [];
     const id = identityBlock(gender, pronouns, lang);
@@ -261,7 +273,7 @@ export function buildNamesPrompt({ lang, notes, sections, charCard, premise, gen
     const seen = avoid.map(n => String(n ?? '').trim()).filter(Boolean);
     if (seen.length) parts.push(`ALREADY SUGGESTED (do not repeat these or close variants):\n${seen.map(n => `- ${maskMacros(n)}`).join('\n')}`);
     parts.push(
-        `${namesSpec({ source, hasWorld: Boolean(wb) })}\n\n`
+        `${namesSpec({ source, hasWorld: Boolean(wb), script: nameScript, example: charCard?.name })}\n\n`
         + 'Output exactly this format and nothing else:\n<<NAMES>>\nFull name | meaning | gimmick\n<</NAMES>>',
     );
     return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n') };

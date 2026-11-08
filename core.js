@@ -252,6 +252,52 @@ export function parseIdeas(raw) {
 // ---------------------------------------------------------------------------
 
 export const NAME_SOURCES = ['mix', 'world', 'new'];
+// ---------------------------------------------------------------------------
+// Naming script. Models follow the language of the author's notes when they name
+// someone, so Thai notes for a Western bot gave Thai names. The script the bot's
+// world writes names in is worked out here, told to the model, and checked after.
+// ---------------------------------------------------------------------------
+
+const SCRIPTS = {
+    thai: /[\u0E00-\u0E7F]/g,
+    latin: /[A-Za-z\u00C0-\u024F]/g,
+    cjk: /[\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/g,
+};
+
+/** The script most of the letters in a text are written in: 'thai' | 'latin' | 'cjk' | ''. */
+export function scriptOf(text) {
+    // Macros such as {{user}} and [[char]] are Latin letters in every card; they say nothing.
+    const s = String(text ?? '').replace(/\{\{[^}]*\}\}|\[\[[^\]]*\]\]/g, ' ');
+    let best = '';
+    let most = 0;
+    for (const [name, re] of Object.entries(SCRIPTS)) {
+        const n = (s.match(re) || []).length;
+        if (n > most) { best = name; most = n; }
+    }
+    return best;
+}
+
+/**
+ * The script names are written in inside the bot's world. The bot's own name decides;
+ * without one, its lorebook's titles, then its card.
+ */
+export function namingScript({ charName = '', worldNames = '', cardText = '' } = {}) {
+    for (const sample of [charName, worldNames, cardText]) {
+        const s = scriptOf(sample);
+        if (s) return s;
+    }
+    return '';
+}
+
+/** Drop suggested names written in another script than the world's. */
+export function keepNamesInScript(names, script) {
+    if (!script) return names;
+    return names.filter(n => {
+        const s = scriptOf(n?.name);
+        return !s || s === script;
+    });
+}
+
 export const NAMES_PER_BATCH = 8;
 const MAX_NAMES = 24;
 

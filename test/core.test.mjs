@@ -5,7 +5,7 @@ import {
     parseTagged, parseLore, splitKeys, assemblePersona, parsePersona, applyPatch, changedKeys,
     buildTranscript, styleStats, loreBookName, loreEntryFields, estimateTokens,
     SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion, parseIdeas, mergeIdeas, ideaSplit, LABELS,
-    parseNameLines, mergeNames, worldNameList, NAMES_PER_BATCH, extractUserRole,
+    parseNameLines, mergeNames, worldNameList, NAMES_PER_BATCH, extractUserRole, scriptOf, namingScript, keepNamesInScript,
 } from '../core.js';
 import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt, genderRule, buildNamesPrompt, buildNameMeaningPrompt, buildNameGimmickPrompt } from '../prompts.js';
 import { STRINGS, fmt, resolveUiLang } from '../i18n.js';
@@ -545,4 +545,21 @@ test('names follow the world, not the output language; padded quotes around a me
     assert.match(p.systemPrompt, /does not make the world Thai/);
     const [n] = parseNameLines('Clara Whitmore | "the beloved" | nobody calls her that');
     assert.equal(n.meaning, 'the beloved');
+});
+
+test('naming script comes from the bot, and off-script names are dropped', () => {
+    assert.equal(scriptOf('Ashton Blake'), 'latin');
+    assert.equal(scriptOf('ณัฐฐิญา ศรีวัฒนา'), 'thai');
+    assert.equal(scriptOf('李白'), 'cjk');
+    assert.equal(scriptOf('123'), '');
+    assert.equal(namingScript({ charName: 'Ashton', worldNames: 'บ้านริมน้ำ', cardText: 'ภาษาไทย' }), 'latin');
+    assert.equal(namingScript({ charName: '{{char}}', worldNames: '', cardText: 'เด็กหนุ่มชาวสยาม' }), 'thai');
+    const names = [{ name: 'Clara Whitmore' }, { name: 'ณัฐฐิญา ศรีวัฒนา' }];
+    assert.deepEqual(keepNamesInScript(names, 'latin').map(n => n.name), ['Clara Whitmore']);
+    assert.equal(keepNamesInScript(names, '').length, 2);
+    const p = buildNamesPrompt({ lang: 'en', notes: 'เพื่อนสมัยเด็ก', charCard: { name: 'Ashton', text: 'A rich heir.' }, nameScript: 'latin' });
+    assert.match(p.prompt, /NAME SCRIPT: .*Latin letters \(like "Ashton"\)/);
+    const w = buildWeavePrompt({ lang: 'en', notes: 'x', charCard: { name: 'Ashton', text: 'A rich heir.' }, withNames: true, nameScript: 'latin' });
+    assert.match(w.prompt, /NAME SCRIPT/);
+    assert.doesNotMatch(buildNamesPrompt({ lang: 'en', notes: 'x' }).prompt, /NAME SCRIPT/);
 });
