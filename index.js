@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.7.0'; // keep in sync with manifest.json
+const VERSION = '0.8.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -55,7 +55,7 @@ const DEFAULTS = Object.freeze({
 /** Warn when the persona is this much over its size budget. */
 const BUDGET_SLACK = 1.15;
 const CHAR_CARD_CHARS = 1200;
-const GREETING_CHARS = 900;
+const GREETING_CHARS = 1500;
 
 function settings() {
     extension_settings[MODULE] = Object.assign({}, DEFAULTS, extension_settings[MODULE]);
@@ -86,6 +86,7 @@ const state = {
     names: [], // [{ name, meaning, hook }] suggestions; tapping one fills the name field
     nameInfo: null, // { name, meaning, gimmick } for the chosen name
     collapsed: {}, // step key -> true when the user folded that step
+    breakRole: false, // true: ideas and weave may depart from the role the card fixes
     pronouns: '', // optional free text, e.g. "she/her" or "ข้า/เจ้า"
 
     busy: false,
@@ -158,12 +159,25 @@ function greetingFor(c) {
     return c?.first_mes ?? '';
 }
 
+/** What the card fixes about {{user}} (premise section, "{{user}} is…" lines, scenario). Cached per card. */
+const roleCache = new Map();
+function cardRole(c) {
+    if (!c) return '';
+    const key = `${c.avatar}|${String(c.description ?? '').length}|${String(c.scenario ?? '').length}`;
+    if (!roleCache.has(key)) roleCache.set(key, core.extractUserRole(c));
+    return roleCache.get(key);
+}
+
 function currentCharCard() {
     const c = targetChar();
     if (!c) return undefined;
-    const text = [c.description, c.personality, c.scenario].filter(Boolean).join('\n\n').slice(0, CHAR_CARD_CHARS);
+    const role = cardRole(c);
+    // With a role found, the scenario is already part of it; the rest is world flavour.
+    const text = [c.personality, role ? '' : c.scenario, c.description]
+        .map(v => String(v ?? '').trim()).filter(Boolean).join('\n\n').slice(0, role ? CHAR_CARD_CHARS - 400 : CHAR_CARD_CHARS);
     const greeting = String(greetingFor(c) ?? '').trim().slice(0, GREETING_CHARS);
-    return text || greeting ? { name: c.name, text, greeting } : undefined;
+    if (!text && !greeting && !role) return undefined;
+    return { name: c.name, text, greeting, role, roleLocked: !state.breakRole };
 }
 
 /** True when the chat has none of the player's own messages yet (a fresh start). */
@@ -348,9 +362,13 @@ function nameSource() {
 async function worldNamesFor(c) {
     try {
         const book = c?.data?.extensions?.world;
-        if (!book || (Array.isArray(world_names) && !world_names.includes(book))) return '';
-        const data = await loadWorldInfo(book);
-        return core.worldNameList(data?.entries);
+        if (book && (!Array.isArray(world_names) || world_names.includes(book))) {
+            const data = await loadWorldInfo(book);
+            const list = core.worldNameList(data?.entries);
+            if (list) return list;
+        }
+        // Not linked (lorebook never imported): use the book embedded in the card.
+        return core.worldNameList(c?.data?.character_book?.entries);
     } catch {
         return '';
     }
@@ -809,6 +827,20 @@ function step(key, num, title, hint, done, body) {
 </details>`;
 }
 
+/** Tells the author the bot fixes {{user}}'s role, shows what was read, and lets them break it. */
+function roleNotice(dis) {
+    const t = ui();
+    const role = cardRole(targetChar());
+    if (!role) return '';
+    return `
+<div class="pw-role ${state.breakRole ? 'pw-role-off' : ''}">
+  <div class="pw-role-head"><i class="fa-solid fa-${state.breakRole ? 'unlock' : 'lock'}"></i> <b>${esc(state.breakRole ? t.roleBroken : t.roleFixed)}</b></div>
+  <small class="pw-hint">${esc(state.breakRole ? t.roleBrokenHint : t.roleFixedHint)}</small>
+  <details><summary>${esc(t.roleShow)}</summary><pre>${esc(role)}</pre></details>
+  <label class="pw-check pw-small"><input type="checkbox" data-field="breakRole" ${state.breakRole ? 'checked' : ''} ${dis}> ${esc(t.roleBreak)}</label>
+</div>`;
+}
+
 function targetSwitch(dis) {
     const t = ui();
     const active = hasActivePersona();
@@ -909,6 +941,7 @@ function weaveBody(dis) {
     const basics = `
 ${targetSwitch(dis)}
 ${charPicker(dis)}
+${roleNotice(dis)}
 ${genderRow(dis)}
 <label class="pw-inline pw-small">${esc(t.langLabel)}
   <select class="text_pole" data-field="lang" ${dis}>${langOption('auto', t.langAuto)}${langOption('th', t.langTh)}${langOption('en', t.langEn)}</select>
@@ -1333,6 +1366,7 @@ function onChange(event) {
         state.target = el.value;
         if (state.target === 'active' && !state.notes.trim() && !hasSections()) loadActive();
     } else if (field === 'selectAfter') state.selectAfter = el.checked;
+    else if (field === 'breakRole') { state.breakRole = el.checked; state.ideas = state.ideas.filter(i => i.used); }
     else if (field === 'gender') state.gender = ['female', 'male', 'nonbinary'].includes(el.value) ? el.value : '';
     else if (field === 'nameSource') { settings().nameSource = core.NAME_SOURCES.includes(el.value) ? el.value : 'mix'; saveSettingsDebounced(); return; }
     else if (field === 'namesWithWeave') { settings().namesWithWeave = el.checked; saveSettingsDebounced(); return; }

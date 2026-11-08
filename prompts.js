@@ -75,14 +75,32 @@ function draftText(sections, lang) {
     return lines.join('\n\n');
 }
 
+/** True when the card fixes who [[user]] is and the author keeps that role. */
+function roleLocked(charCard) {
+    return Boolean(String(charCard?.role ?? '').trim()) && charCard?.roleLocked !== false;
+}
+
+function roleBlock(charCard) {
+    const role = String(charCard?.role ?? '').trim();
+    if (!role) return '';
+    if (charCard?.roleLocked === false) {
+        return `[[user]]'S DEFAULT ROLE IN THIS CARD (the author allows departing from it; keep only what the premise does not replace):\n${maskMacros(role)}`;
+    }
+    return `[[user]]'S ROLE, FIXED BY THE CARD (hard canon: the persona lives INSIDE this role and never replaces or contradicts it: same origin, status, condition, teacher, belongings and situation. Build personality, motives, history before the story, habits and private secrets around it. Anything the card says [[user]] does not know stays unknown to [[user]]: never state it, never let the persona know it):\n${maskMacros(role)}`;
+}
+
 function charBlock(charCard, premise) {
-    if (!charCard?.text && !charCard?.greeting) return '';
+    if (!charCard?.text && !charCard?.greeting && !charCard?.role) return '';
     const parts = [];
+    const rb = roleBlock(charCard);
+    if (rb) parts.push(rb);
     if (charCard.text) parts.push(`OTHER CHARACTER ([[char]]) — ${maskMacros(charCard.name)}:\n${maskMacros(charCard.text)}`);
     if (charCard.greeting) {
-        const rule = String(premise ?? '').trim()
-            ? 'keep its hard facts (place, moment, who is present, what just happened); the PREMISE decides who [[user]] really is in it'
-            : 'it often sets who [[user]] is, where they are and why they are with [[char]]; the persona must fit it and must not contradict it';
+        const rule = roleLocked(charCard)
+            ? 'it shows [[user]] already inside the fixed role; keep its facts'
+            : String(premise ?? '').trim()
+                ? 'keep its hard facts (place, moment, who is present, what just happened); the PREMISE decides who [[user]] really is in it'
+                : 'it often sets who [[user]] is, where they are and why they are with [[char]]; the persona must fit it and must not contradict it';
         parts.push(`OPENING SCENE (the first message of the story; ${rule}):\n${maskMacros(charCard.greeting)}`);
     }
     return parts.join('\n\n');
@@ -116,9 +134,12 @@ function identityBlock(gender, pronouns, lang) {
     return rule ? `GENDER AND PRONOUNS (fixed, apply everywhere, including dialogue samples):\n${rule}` : '';
 }
 
-function premiseBlock(premise) {
+function premiseBlock(premise, locked = false) {
     const p = String(premise ?? '').trim();
     if (!p) return '';
+    if (locked) {
+        return `PREMISE (the concept the author chose for [[user]]; it is the FOUNDATION of the persona and every block must express it. It works INSIDE the role the card fixes: where it seems to clash with that role, keep the role and find the reading of the premise that fits it. Over the notes and the current draft, the premise wins):\n${maskMacros(p)}`;
+    }
     return `PREMISE (the concept the author chose for [[user]]; it is the FOUNDATION of the persona. Every block must express it, not just mention it. Where the current draft, the notes or the obvious reading of the card disagree with it, the premise wins. From the opening scene keep only its hard facts (place, moment, who is present) and reinterpret [[user]]'s place in it through the premise):\n${maskMacros(p)}`;
 }
 
@@ -127,6 +148,9 @@ function notesText(notes, charCard, premise) {
     const n = String(notes ?? '').trim();
     if (n) return maskMacros(n);
     if (String(premise ?? '').trim()) return '(none beyond the premise)';
+    if (roleLocked(charCard)) {
+        return '(none. The card fixes [[user]]\'s role; invent the person inside it: a specific temperament, a want, a private secret the card leaves open, and a way of coping with the situation the card puts [[user]] in.)';
+    }
     if (charCard?.text || charCard?.greeting) {
         return '(none. Invent [[user]] to fit [[char]] and the opening scene: someone with a reason to be there, a want that rubs against [[char]], and a secret worth discovering. Prefer the specific and slightly unexpected over the obvious match.)';
     }
@@ -154,7 +178,7 @@ export function buildWeavePrompt({ keys = SECTION_KEYS, lang, size, name, notes,
     const parts = [`PERSONA NAME: ${maskMacros(name || '(unnamed)')}`];
     const id = identityBlock(gender, pronouns, lang);
     if (id) parts.push(id);
-    if (hasPremise) parts.push(premiseBlock(premise));
+    if (hasPremise) parts.push(premiseBlock(premise, roleLocked(charCard)));
     const nib = nameInfoBlock(nameInfo);
     if (nib) parts.push(nib);
     parts.push(`AUTHOR'S ROUGH NOTES (keep their facts; do not contradict):\n${notesText(notes, charCard, premise)}`);
@@ -198,7 +222,7 @@ export function namesSpec({ source = 'mix', hasWorld = false, count = NAMES_PER_
         + 'Every name must MEAN something: its real meaning in its language of origin, or an in-world meaning or wordplay that fits the setting. MEANING (at most 10 words) says what it means; when a family name carries the weight, say what the family name means. '
         + 'GIMMICK (at most 20 words) turns that meaning into something playable for [[user]]: an irony between the name and the person, a habit or superstition, a power or a curse, how people react on hearing it, a nickname, the status it carries (old house, fallen house, commoner, foreigner, an alias hiding the truth). The gimmick must fit the premise. '
         + 'Each name must fit [[user]]\'s gender and the culture of [[char]]\'s world. Make them varied in meaning, status and sound. '
-        + 'Never reuse [[char]]\'s own name; reuse a family or house from the world only as a deliberate story point and say so in the gimmick. '
+        + 'Never reuse [[char]]\'s own name or the name of a character already in the world; reuse a family or house only as a deliberate story point and say so in the gimmick. If the card fixes [[user]]\'s role, every name fits that role\'s origin and standing. '
         + 'Write each name in the script the setting uses (as the card and lorebook write names); write meaning and gimmick in the output language. '
         + nameSourceRule(source, hasWorld);
 }
@@ -227,7 +251,7 @@ export function buildNamesPrompt({ lang, notes, sections, charCard, premise, gen
     const parts = [];
     const id = identityBlock(gender, pronouns, lang);
     if (id) parts.push(id);
-    if (String(premise ?? '').trim()) parts.push(premiseBlock(premise));
+    if (String(premise ?? '').trim()) parts.push(premiseBlock(premise, roleLocked(charCard)));
     if (String(notes ?? '').trim()) parts.push(`AUTHOR'S NOTES:\n${maskMacros(notes)}`);
     if (draft) parts.push(`PERSONA SHEET:\n${maskMacros(draft)}`);
     const cc = charBlock(charCard, premise);
@@ -249,7 +273,7 @@ export function buildNameMeaningPrompt({ lang, name, notes, sections, charCard, 
     const parts = [`THE NAME: ${maskMacros(name)}`];
     const id = identityBlock(gender, pronouns, lang);
     if (id) parts.push(id);
-    if (String(premise ?? '').trim()) parts.push(premiseBlock(premise));
+    if (String(premise ?? '').trim()) parts.push(premiseBlock(premise, roleLocked(charCard)));
     if (String(notes ?? '').trim()) parts.push(`AUTHOR'S NOTES:\n${maskMacros(notes)}`);
     if (draft) parts.push(`PERSONA SHEET:\n${maskMacros(draft)}`);
     const cc = charBlock(charCard, premise);
@@ -294,6 +318,20 @@ const WILD_ANGLES = [
 ];
 
 /**
+ * Wild angles that keep a role the card fixes. "Not human" or "from another time" would
+ * break such a card, so surprise comes from who the person is inside the role.
+ */
+const ROLE_WILD_ANGLES = [
+    'a temperament nobody expects in this role (the cheerful one under the curse, the schemer in the lowliest post, the coward who keeps volunteering)',
+    'a private obsession, skill or hobby that has nothing to do with the role and keeps getting in the way',
+    'a hidden reason for being here that the card leaves open, different from the official one',
+    'a secret tie, debt or grudge with someone in this world, from before the story',
+    'a strange way of coping with the situation the card imposes: a ritual, a superstition, a running joke played straight',
+    'a belief or an old wound that bends how they live this role, for better or worse',
+    'a misunderstanding about themselves that everyone else shares, or that only they believe',
+];
+
+/**
  * Ideas: persona concepts that fit a bot, for a fresh start with no chat yet.
  * @param {object} p
  * @param {'mix'|'fit'|'wild'} [p.mix] how many grounded vs unexpected ideas
@@ -304,7 +342,7 @@ export function buildIdeasPrompt({ lang, notes, charCard, mix = 'mix', avoid = [
     const total = fit + wild;
     const parts = [];
     const id = identityBlock(gender, pronouns, lang);
-    if (id) parts.push(`${id}\nEvery idea keeps this gender, even when [[user]] is not human.`);
+    if (id) parts.push(`${id}\nEvery idea keeps this gender${roleLocked(charCard) ? '' : ', even when [[user]] is not human'}.`);
     const cc = charBlock(charCard);
     if (cc) parts.push(cc);
     const n = String(notes ?? '').trim();
@@ -313,14 +351,24 @@ export function buildIdeasPrompt({ lang, notes, charCard, mix = 'mix', avoid = [
     if (seen.length) parts.push(`ALREADY SUGGESTED (do not repeat these or close variations of them):\n${seen.map(t => `- ${maskMacros(t)}`).join('\n')}`);
 
     const asks = [];
-    if (fit) asks.push(`${fit} FIT idea${fit > 1 ? 's' : ''}: grounded in the card and the opening scene, each with a clearly different dynamic with [[char]] (friction, tenderness, mystery, rivalry, dependence, protection…). Avoid the most obvious match.`);
-    if (wild) {
-        asks.push(`${wild} WILD idea${wild > 1 ? 's' : ''}: surprising, against the grain, ideas the player would never think of, yet still playable from the very first reply without breaking the facts of the opening scene. Each one takes a different angle; draw on these, or better:\n${WILD_ANGLES.map(a => `  * ${a}`).join('\n')}`);
+    const locked = roleLocked(charCard);
+    if (locked) {
+        if (fit) asks.push(`${fit} FIT idea${fit > 1 ? 's' : ''}: the role exactly as the card fixes it, each a clearly different PERSON inside it (temperament, what they want, how they cope, how they treat the people around them). Avoid the most obvious take.`);
+        if (wild) {
+            asks.push(`${wild} WILD idea${wild > 1 ? 's' : ''}: surprising takes the player would never think of, still fully inside the fixed role and playable from the very first reply. Surprise comes from who [[user]] is, never from changing what the card fixes. Each takes a different angle; draw on these, or better:\n${ROLE_WILD_ANGLES.map(a => `  * ${a}`).join('\n')}`);
+        }
+    } else {
+        if (fit) asks.push(`${fit} FIT idea${fit > 1 ? 's' : ''}: grounded in the card and the opening scene, each with a clearly different dynamic with [[char]] (friction, tenderness, mystery, rivalry, dependence, protection…). Avoid the most obvious match.`);
+        if (wild) {
+            asks.push(`${wild} WILD idea${wild > 1 ? 's' : ''}: surprising, against the grain, ideas the player would never think of, yet still playable from the very first reply without breaking the facts of the opening scene. Each one takes a different angle; draw on these, or better:\n${WILD_ANGLES.map(a => `  * ${a}`).join('\n')}`);
+        }
     }
 
     parts.push(
         `The player is about to start a NEW story with [[char]] and has no persona yet. Propose exactly ${total} persona concepts for [[user]], all different from each other:\n${asks.join('\n')}\n\n`
-        + 'Each idea: a short, vivid title, then 2-3 short lines: who [[user]] is and why they are in this scene; what they want from or hide from [[char]]; the dynamic or the hook it creates. At most 45 words per idea.\n\n'
+        + (locked
+            ? 'Each idea: a short, vivid title, then 2-3 short lines: who [[user]] is as a person inside the fixed role; what they want and what they hide; the hook it gives the story. Never contradict the role, and never reveal what the card keeps from [[user]]. At most 45 words per idea.\n\n'
+            : 'Each idea: a short, vivid title, then 2-3 short lines: who [[user]] is and why they are in this scene; what they want from or hide from [[char]]; the dynamic or the hook it creates. At most 45 words per idea.\n\n')
         + 'Output exactly this format and nothing else, with fit or wild as the second field:\n@@IDEA | fit | Title\n(2-3 lines)\n@@IDEA | wild | Title\n(2-3 lines)',
     );
     return { systemPrompt: systemFor(lang), prompt: parts.join('\n\n'), count: total };
@@ -395,7 +443,7 @@ export function buildLorePrompt({ lang, size, name, notes, sections, charCard, p
     const parts = [`PERSONA NAME: ${maskMacros(name || '(unnamed)')}`];
     const id = identityBlock(gender, pronouns, lang);
     if (id) parts.push(id);
-    if (hasPremise) parts.push(premiseBlock(premise));
+    if (hasPremise) parts.push(premiseBlock(premise, roleLocked(charCard)));
     const nib = nameInfoBlock(nameInfo);
     if (nib) parts.push(`${nib}\nOne entry may tell where the name comes from: who gave it, why, and what it costs [[user]].`);
     parts.push(`AUTHOR'S ROUGH NOTES:\n${notesText(notes, null, premise)}`);
