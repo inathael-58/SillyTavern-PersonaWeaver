@@ -263,7 +263,7 @@ const MAX_NAMES = 24;
 export function parseNameLines(text) {
     const out = [];
     const seen = new Set();
-    const clean = v => String(v ?? '').replace(/^\*\*|\*\*$/g, '').replace(/^["“'‘]+|["”'’]+$/g, '').trim();
+    const clean = v => String(v ?? '').trim().replace(/^\*\*|\*\*$/g, '').replace(/^["“'‘]+|["”'’]+$/g, '').trim();
     for (const raw of String(text ?? '').replace(/\r\n/g, '\n').split('\n')) {
         const line = raw.trim().replace(/^(?:[-•*]|\d+[.)])\s*/, '').replace(/^\*\*(.+?)\*\*/, '$1');
         if (!line || /^<<|^@@/.test(line)) continue;

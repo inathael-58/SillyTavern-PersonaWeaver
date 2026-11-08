@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.1'; // keep in sync with manifest.json
+const VERSION = '0.8.2'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -206,9 +206,17 @@ function hasSections(sections = state.sections) {
     return SECTION_KEYS.some(k => String(sections[k] ?? '').trim());
 }
 
+/**
+ * Output language. Auto follows the bot's card when a bot is picked: the persona is read
+ * next to that card on every turn, so it should speak the card's language, whatever
+ * language the author typed their notes in. Without a bot, it follows the author's text.
+ */
 function concreteLang() {
     const setting = settings().lang;
     if (setting === 'th' || setting === 'en') return setting;
+    const card = currentCharCard();
+    const cardSample = card ? `${card.role ?? ''}\n${card.text ?? ''}\n${card.greeting ?? ''}` : '';
+    if (cardSample.trim()) return core.resolveLang('auto', cardSample);
     const sample = `${state.premise}\n${state.notes}\n${SECTION_KEYS.map(k => state.sections[k]).join('\n')}`;
     if (!sample.trim()) return resolveUiLang(settings().uiLang, getCurrentLocale());
     return core.resolveLang('auto', sample);
@@ -947,7 +955,7 @@ ${charPicker(dis)}
 ${roleNotice(dis)}
 ${genderRow(dis)}
 <label class="pw-inline pw-small">${esc(t.langLabel)}
-  <select class="text_pole" data-field="lang" ${dis}>${langOption('auto', t.langAuto)}${langOption('th', t.langTh)}${langOption('en', t.langEn)}</select>
+  <select class="text_pole" data-field="lang" ${dis}>${langOption('auto', t.langAutoBot)}${langOption('th', t.langTh)}${langOption('en', t.langEn)}</select>
 </label>
 ${isFreshChat() && state.target === 'new' ? `<div class="pw-hint pw-fresh"><i class="fa-solid fa-seedling"></i> ${esc(t.freshHint)}</div>` : ''}`;
 
@@ -1453,7 +1461,7 @@ function mountSettings() {
     <label>${esc(t.setSize)}${sizeSelectHtml('id="pw_set_size"')}</label>
     <label>${esc(t.setTimeout)}<input id="pw_set_to" class="text_pole" type="number" min="15" max="600" step="15" value="${esc(s.timeoutSec)}"></label>
     <label>${esc(t.setLang)}
-      <select id="pw_set_lang" class="text_pole">${opt(s.lang, 'auto', t.langAuto)}${opt(s.lang, 'th', t.langTh)}${opt(s.lang, 'en', t.langEn)}</select>
+      <select id="pw_set_lang" class="text_pole">${opt(s.lang, 'auto', t.langAutoBot)}${opt(s.lang, 'th', t.langTh)}${opt(s.lang, 'en', t.langEn)}</select>
     </label>
     <label class="checkbox_label"><input id="pw_set_thai" type="checkbox" ${s.thaiSpacing ? 'checked' : ''}><span>${esc(t.setThai)}</span></label>
     <small>${esc(t.setThaiHint)}</small>
