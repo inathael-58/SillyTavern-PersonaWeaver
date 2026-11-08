@@ -21,6 +21,7 @@ import { getUserAvatars, setPersonaDescription, setUserAvatar, user_avatar } fro
 import { getContext } from '../../../st-context.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
+import { createDiagnostics } from './diagnostics.js';
 import { getTokenCountAsync } from '../../../tokenizers.js';
 import { createWorldInfoEntry, loadWorldInfo, saveWorldInfo, updateWorldInfoList, world_names } from '../../../world-info.js';
 
@@ -31,10 +32,23 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.4'; // keep in sync with manifest.json
+const VERSION = '0.8.5'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
-const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
+const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'diagnostics.js', 'style.css', 'manifest.json'];
+
+// Extensions > Persona Weaver > Diagnose (and /pweave-debug): opens the weaver, measures it, reports.
+const DIAG = createDiagnostics({
+    name: 'Persona Weaver',
+    version: VERSION,
+    baseUrl: BASE_URL,
+    open: () => openWeaver(),
+    close: () => closeWeaver(),
+    isOpen: () => !!document.getElementById('pw_overlay'),
+    overlay: () => document.getElementById('pw_overlay'),
+    frame: () => document.querySelector('#pw_overlay .pw-panel'),
+    state: () => `uiLang=${settings().uiLang} lang=${settings().lang}`,
+});
 const DRAFT_KEY = 'persona_weaver_draft';
 
 const DEFAULTS = Object.freeze({
@@ -1440,12 +1454,14 @@ function openWeaver() {
         if (step) state.collapsed[step] = !e.target.open;
     }, true);
     document.body.appendChild(root);
+    DIAG.noteOpen();
     document.addEventListener('keydown', onKey);
-    render();
+    try { render(); } catch (err) { DIAG.reportError('วาด Persona Weaver ไม่ได้', err); }
     checkForNewVersion();
 }
 
 function closeWeaver() {
+    if (document.getElementById('pw_overlay')) DIAG.noteClose();
     document.getElementById('pw_overlay')?.remove();
     document.removeEventListener('keydown', onKey);
 }
@@ -1497,6 +1513,7 @@ function mountSettings() {
   </div>
 </div>`;
     host.appendChild(wrap);
+    DIAG.mount(wrap.querySelector('.pw-set-btns'));
 
     const num = (id, key, min, max) => wrap.querySelector(id).addEventListener('change', (e) => {
         const v = Number(e.target.value);
@@ -1577,6 +1594,7 @@ function registerSlashCommand() {
         callback: () => { openWeaver(); return ''; },
         helpString: 'Opens Persona Weaver, the layered persona builder.',
     }));
+    DIAG.registerCommand({ SlashCommandParser, SlashCommand }, 'pweave-debug');
 }
 
 jQuery(() => {
