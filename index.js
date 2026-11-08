@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.3'; // keep in sync with manifest.json
+const VERSION = '0.8.4'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -332,8 +332,9 @@ async function weave(keys) {
         if (!state.notes.trim() && !state.premise.trim() && !hasSections() && !charCard) throw new Error(t.needNotes);
         const size = sizeNow();
         const withNames = wantsNamesWithWeave(keys);
-        const worldNames = withNames && nameSource() !== 'new' ? await worldNamesFor(targetChar()) : '';
-        const nameScript = withNames ? nameScriptFor(charCard, worldNames) : '';
+        const allWorldNames = withNames && nameSource() !== 'new' ? await worldNamesFor(targetChar()) : '';
+        const nameScript = withNames ? nameScriptFor(charCard, allWorldNames) : '';
+        const worldNames = core.worldNamesInScript(allWorldNames, nameScript);
         const p = prompts.buildWeavePrompt({
             keys,
             lang: concreteLang(),
@@ -403,8 +404,9 @@ async function suggestNames(more = false) {
         const t = ui();
         const c = targetChar();
         const charCard = currentCharCard();
-        const worldNames = nameSource() === 'new' ? '' : await worldNamesFor(c);
-        const nameScript = nameScriptFor(charCard, worldNames);
+        const allWorldNames = nameSource() === 'new' ? '' : await worldNamesFor(c);
+        const nameScript = nameScriptFor(charCard, allWorldNames);
+        const worldNames = core.worldNamesInScript(allWorldNames, nameScript);
         const p = prompts.buildNamesPrompt({
             lang: concreteLang(),
             notes: state.notes,

@@ -57,8 +57,14 @@ export function languageRule(lang) {
     return 'Write in the same language as the author\'s notes.';
 }
 
+/**
+ * Models read the language of the notes as a clue about who [[user]] is: Thai notes for a
+ * Western bot gave a Thai girl with romanized Thai names, temple visits and all.
+ */
+export const NOT_A_CLUE = 'The author may write notes in their own language (Thai, for example). That language says nothing about [[user]]: [[user]]\'s nationality, ethnicity, culture, names, places, food and customs come from [[char]]\'s world as the card shows it, never from the language the notes are written in. Make [[user]] come from somewhere else only when the notes or the card say so in words.';
+
 function systemFor(lang) {
-    return `${PRINCIPLES}\n\n${languageRule(lang)}`;
+    return `${PRINCIPLES}\n\n${NOT_A_CLUE}\n\n${languageRule(lang)}`;
 }
 
 function blockFormat(keys) {
@@ -223,7 +229,7 @@ export function nameScriptRule(script, example = '') {
     const label = SCRIPT_NAMES[script];
     if (!label) return '';
     const ex = String(example ?? '').trim();
-    return `NAME SCRIPT: [[char]]'s world writes names in ${label}${ex ? ` (like "${maskMacros(ex)}")` : ''}. Write EVERY name in ${label}, as a real name from that culture, even when the author's notes or the output language use another script. A name in any other script is wrong.`;
+    return `NAME SCRIPT AND CULTURE: [[char]]'s world writes names in ${label}${ex ? ` (like "${maskMacros(ex)}")` : ''}. Write EVERY name in ${label}, and take every name from the same culture as [[char]]'s world, even when the author's notes or the output language use another language. A name in another script is wrong; so is a name from another culture spelled in ${label} (a romanized Thai name in a Western setting, for example), unless the notes say [[user]] comes from there.`;
 }
 
 export function namesSpec({ source = 'mix', hasWorld = false, count = NAMES_PER_BATCH, script = '', example = '' } = {}) {
