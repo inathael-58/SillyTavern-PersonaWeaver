@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.2'; // keep in sync with manifest.json
+const VERSION = '0.8.3'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -332,6 +332,8 @@ async function weave(keys) {
         if (!state.notes.trim() && !state.premise.trim() && !hasSections() && !charCard) throw new Error(t.needNotes);
         const size = sizeNow();
         const withNames = wantsNamesWithWeave(keys);
+        const worldNames = withNames && nameSource() !== 'new' ? await worldNamesFor(targetChar()) : '';
+        const nameScript = withNames ? nameScriptFor(charCard, worldNames) : '';
         const p = prompts.buildWeavePrompt({
             keys,
             lang: concreteLang(),
@@ -342,8 +344,9 @@ async function weave(keys) {
             charCard,
             ...identity(),
             withNames,
-            worldNames: withNames && nameSource() !== 'new' ? await worldNamesFor(targetChar()) : '',
+            worldNames,
             nameSource: nameSource(),
+            nameScript,
         });
         let task = keys.length === 1 ? fmt(t.task_regen, { layer: t['sec_' + keys[0]] }) : t.task_weaveAll;
         if (withNames) task += ` + ${fmt(t.task_names, { n: core.NAMES_PER_BATCH, kind: t['nameSource_' + nameSource()] })}`;
@@ -351,8 +354,11 @@ async function weave(keys) {
         pushHistory();
         for (const k of keys) if (parsed[k]) state.sections[k] = tidy(core.fitLayer(k, parsed[k], size));
         if (withNames && parsed.names) {
-            const names = core.parseNameLines(tidy(parsed.names));
+            const all = core.parseNameLines(tidy(parsed.names));
+            const names = core.keepNamesInScript(all, nameScript);
             if (names.length) state.names = names;
+            // The layers are kept either way; only the off-script names are dropped.
+            else if (all.length) toastr.warning(t.errNameScript, t.title);
         }
     });
 }
@@ -382,6 +388,11 @@ async function worldNamesFor(c) {
     }
 }
 
+/** The script the bot's world writes names in, from its name, lorebook titles or card. */
+function nameScriptFor(charCard, worldNames) {
+    return core.namingScript({ charName: charCard?.name, worldNames, cardText: charCard?.text });
+}
+
 function wantsNamesWithWeave(keys) {
     return state.target === 'new' && settings().namesWithWeave && keys.length === SECTION_KEYS.length;
 }
@@ -391,20 +402,26 @@ async function suggestNames(more = false) {
     await run(async () => {
         const t = ui();
         const c = targetChar();
+        const charCard = currentCharCard();
+        const worldNames = nameSource() === 'new' ? '' : await worldNamesFor(c);
+        const nameScript = nameScriptFor(charCard, worldNames);
         const p = prompts.buildNamesPrompt({
             lang: concreteLang(),
             notes: state.notes,
             sections: state.sections,
-            charCard: currentCharCard(),
+            charCard,
             ...identity(),
-            worldNames: nameSource() === 'new' ? '' : await worldNamesFor(c),
+            worldNames,
             source: nameSource(),
             avoid: more ? state.names.map(n => n.name) : [],
+            nameScript,
         });
         const raw = await callModel(p, settings().otherTokens, fmt(t.task_names, { n: core.NAMES_PER_BATCH, kind: t['nameSource_' + nameSource()] }));
         const block = core.parseTagged(raw, ['names']).names ?? raw;
-        const batch = core.parseNameLines(tidy(block));
-        if (!batch.length) throw new Error(t.errFormat);
+        const all = core.parseNameLines(tidy(block));
+        if (!all.length) throw new Error(t.errFormat);
+        const batch = core.keepNamesInScript(all, nameScript);
+        if (!batch.length) throw new Error(t.errNameScript);
         state.names = more ? core.mergeNames(state.names, batch) : batch;
     });
 }
