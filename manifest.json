@@ -6,7 +6,7 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Kitima",
-    "version": "0.8.0",
+    "version": "0.8.1",
     "auto_update": true,
     "homePage": "https://github.com/inathael-58/SillyTavern-PersonaWeaver",
     "description": "Turns rough persona notes into a compact layered persona (inner conflict, voice samples, what each side knows, turn-writing rules) under a token budget. Pick the API per request; nothing is sent without asking first."
