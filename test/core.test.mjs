@@ -5,7 +5,7 @@ import {
     parseTagged, parseLore, splitKeys, assemblePersona, parsePersona, applyPatch, changedKeys,
     buildTranscript, styleStats, loreBookName, loreEntryFields, estimateTokens,
     SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion, parseIdeas, mergeIdeas, ideaSplit, LABELS,
-    parseNameLines, mergeNames, worldNameList, NAMES_PER_BATCH,
+    parseNameLines, mergeNames, worldNameList, NAMES_PER_BATCH, extractUserRole,
 } from '../core.js';
 import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt, genderRule, buildNamesPrompt, buildNameMeaningPrompt, buildNameGimmickPrompt } from '../prompts.js';
 import { STRINGS, fmt, resolveUiLang } from '../i18n.js';
@@ -471,4 +471,69 @@ test('name meaning and gimmick prompts', () => {
     const g = buildNameGimmickPrompt({ lang: 'en', size: 'lean', name: 'Noor', sections: { core: 'A djinn.', samples: '(angry) no' }, nameInfo: { name: 'Noor', meaning: 'light', gimmick: 'glows' } });
     assert.ok(g.prompt.includes('at most three') && g.prompt.includes('CORE always') && g.prompt.includes('A djinn.'));
     assert.ok(g.prompt.includes('at most 30 words'), 'carries the size limits');
+});
+
+const fixedRoleCard = {
+    description: [
+        '# NARRATOR CARD',
+        '{{char}} is the narrator. {{user}} is the protagonist.',
+        '## STYLE',
+        '- Never write {{user}}\'s dialogue, thoughts or decisions.',
+        '- Third-person narration. {{user}} may be any gender.',
+        '## PREMISE',
+        '{{user}} is a mortal with a body hypersensitive to yin and yang.',
+        'No elder would take the "madman" except the drunk Elder Jiu, who accepted {{user}} as a nominal disciple.',
+        'Unknown to {{user}}, {{user}} was once a deity of the Heavens.',
+        '- Never narrate {{user}}\'s thoughts.',
+        '## MECHANICS',
+        'When {{user}} has enough qi, they may attempt a breakthrough.',
+        '{{user}} is one more incident away from expulsion.',
+    ].join('\n'),
+    scenario: 'Early autumn. {{user}} is an outer disciple of the sect.',
+};
+
+test('extractUserRole: premise section, "{{user}} is" lines and scenario; skips writing rules and mechanics', () => {
+    const role = extractUserRole(fixedRoleCard);
+    assert.ok(role.startsWith('Early autumn.'), 'scenario first');
+    assert.ok(role.includes('{{user}} is the protagonist.'));
+    assert.ok(role.includes('hypersensitive to yin and yang') && role.includes('Elder Jiu'), 'whole premise section, also lines without "{{user}} is"');
+    assert.ok(role.includes('Unknown to {{user}}, {{user}} was once a deity'));
+    assert.ok(role.includes('one more incident away from expulsion'));
+    assert.ok(!role.includes('Never write') && !role.includes('Never narrate'), 'writing rules skipped');
+    assert.ok(!role.includes('When {{user}} has enough qi'), 'mechanics skipped');
+    assert.ok(!role.includes('may be any gender'));
+    assert.equal(extractUserRole({ description: 'A cheerful baker who loves bread.' }), '');
+    assert.ok(extractUserRole(fixedRoleCard, 60).length <= 60);
+});
+
+test('fixed role: sent as hard canon; ideas vary the person inside it; premise works inside it; can be unlocked', () => {
+    const role = extractUserRole(fixedRoleCard);
+    const card = { name: 'Narrator', text: 'xianxia world', greeting: 'Cold woke {{user}}.', role, roleLocked: true };
+    const ideas = buildIdeasPrompt({ lang: 'en', charCard: card, mix: 'mix' });
+    assert.ok(ideas.prompt.includes('FIXED BY THE CARD') && ideas.prompt.includes('nominal disciple'));
+    assert.ok(ideas.prompt.includes('never from changing what the card fixes'));
+    assert.ok(!ideas.prompt.includes('not human, not alone'), 'role-breaking angles are not offered');
+    assert.ok(ideas.prompt.includes('never reveal what the card keeps from [[user]]'));
+    assert.ok(!/\{\{\s*(user|char)\s*\}\}/i.test(ideas.prompt));
+
+    const w = buildWeavePrompt({ lang: 'en', name: 'K', notes: '', sections: {}, charCard: card, premise: 'Secret poet' });
+    assert.ok(w.prompt.includes('It works INSIDE the role the card fixes'));
+    assert.ok(buildWeavePrompt({ lang: 'en', name: 'K', notes: '', sections: {}, charCard: card }).prompt.includes('invent the person inside it'), 'no notes and no premise: invent inside the role');
+    assert.ok(w.prompt.indexOf('FIXED BY THE CARD') > 0);
+
+    const free = buildIdeasPrompt({ lang: 'en', charCard: { ...card, roleLocked: false } });
+    assert.ok(free.prompt.includes('DEFAULT ROLE') && free.prompt.includes('not human, not alone'));
+    const plain = buildIdeasPrompt({ lang: 'en', charCard: { name: 'X', text: 'a knight', greeting: 'hi' } });
+    assert.ok(!plain.prompt.includes('FIXED BY THE CARD'));
+});
+
+test('worldNameList reads an embedded character_book and leaves out GM-only titles and bracketed notes', () => {
+    const embedded = [
+        { comment: 'SECRET · full past-life truth (GM only)', keys: ['xuanheng'], enabled: true },
+        { comment: 'NPC · Elder Jiu 酒长老 (司命)', keys: ['Jiu'], enabled: true },
+        { comment: 'Place · Cold Pool', keys: ['pool'], enabled: true },
+        { comment: 'Forms of address (always on)', keys: ['call'], enabled: true },
+        { comment: 'Off', keys: ['x'], enabled: false },
+    ];
+    assert.equal(worldNameList(embedded), 'Elder Jiu 酒长老, Jiu, Cold Pool, pool');
 });

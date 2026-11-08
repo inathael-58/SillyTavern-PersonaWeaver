@@ -320,15 +320,86 @@ export function worldNameList(entries, maxChars = 900) {
         seen.add(id);
         names.push(n);
     };
-    for (const e of Object.values(entries ?? {})) {
-        if (!e || e.disable) continue;
-        add(e.comment);
-        if (Array.isArray(e.key) && e.key.length) add(e.key[0]);
+    // Works for ST world files (key, comment, disable) and for a card's embedded
+    // character_book (keys, comment/name, enabled).
+    const list = Array.isArray(entries) ? entries : Object.values(entries ?? {});
+    for (const e of list) {
+        if (!e || e.disable || e.enabled === false) continue;
+        // GM-only and rule entries are not names; their titles may even spoil a secret.
+        if (/\b(secret|gm[- ]?only|spoiler|always on|forms of address|rules?|system|mechanics?|instructions?)\b/i.test(String(e.comment || e.name || ''))) continue;
+        // Bracketed parts of a title often hold a true identity or a note; leave them out.
+        add(String(e.comment || e.name || '').replace(/^\s*(?:npc|place|item|world|lore)\s*[·:|-]\s*/i, '').replace(/\s*[([（【][^)\]）】]*[)\]）】]/g, ''));
+        const keys = Array.isArray(e.key) ? e.key : Array.isArray(e.keys) ? e.keys : [];
+        if (keys.length) add(keys[0]);
     }
     let out = '';
     for (const n of names) {
         const next = out ? `${out}, ${n}` : n;
         if (next.length > maxChars) break;
+        out = next;
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// The user's role as the card fixes it
+// ---------------------------------------------------------------------------
+
+const ROLE_HEADING = /^\s*#{1,6}\s*.*\b(premise|protagonist|player|user|your role|you are|role|setup|set-up|backstory|background|scenario|story)\b|^\s*#{1,6}\s*.*(บทบาท|ผู้เล่น|ตัวเอก|ปูเรื่อง|เนื้อเรื่อง|ฉากหลัง)/i;
+const ROLE_LINE = /^\s*(?:[-*•]\s*)?(?:unknown to \{\{user\}\},\s*)?\{\{user\}\}(?:'s)?\s+(?:is|was|are|were|has|had|wears|carries|calls|lives|works|serves|belongs|became|becomes|starts|begins|arrives|must)\b|^\s*(?:[-*•]\s*)?\{\{user\}\}\s*(?:เป็น|คือ|ถูก|มี|อาศัย|ทำงาน)|^\s*(?:[-*•]\s*)?you (?:are|play)\b/i;
+const WRITING_RULE = /\b(?:never|don'?t|do not|avoid|must not|only)\b[^.\n]*\b(?:write|speak|act|decide|narrat|control|impersonat|describe)|\b(?:write|speak|act|decide|control)\s+(?:for|as)\s+\{\{user\}\}|\{\{user\}\}'s\s+(?:dialogue|thoughts|actions|decisions|turns?|lines)\b/i;
+
+/**
+ * Pull out what a card fixes about {{user}}: sections whose heading reads like the premise or
+ * the player's role, plus lines elsewhere that say what {{user}} is ("{{user}} is…", "you are…").
+ * Writing rules about {{user}} ("never write {{user}}'s dialogue") are skipped. The scenario is
+ * included first because it usually states the set-up.
+ * @param {{description?:string, personality?:string, scenario?:string}} card
+ */
+export function extractUserRole(card, maxChars = 1800) {
+    const chunks = [];
+    const seen = new Set();
+    const push = (text) => {
+        const t = String(text ?? '').replace(/\n{3,}/g, '\n\n').trim();
+        if (!t) return;
+        const id = t.toLowerCase();
+        if (seen.has(id)) return;
+        seen.add(id);
+        chunks.push(t);
+    };
+
+    const scenario = String(card?.scenario ?? '').trim();
+    if (/\{\{user\}\}|\byou\b/i.test(scenario)) push(scenario);
+
+    for (const field of [card?.description, card?.personality]) {
+        const lines = String(field ?? '').replace(/\r\n/g, '\n').split('\n');
+        let inRole = false;
+        let section = [];
+        const flush = () => { if (section.length) push(section.join('\n')); section = []; };
+        for (const line of lines) {
+            if (/^\s*#{1,6}\s/.test(line)) {
+                flush();
+                inRole = ROLE_HEADING.test(line);
+                continue;
+            }
+            if (inRole) {
+                if (!WRITING_RULE.test(line)) section.push(line);
+                continue;
+            }
+            for (const sentence of line.split(/(?<=[.!?。])\s+/)) {
+                if (ROLE_LINE.test(sentence) && !WRITING_RULE.test(sentence)) push(sentence.replace(/^\s*[-*•]\s*/, ''));
+            }
+        }
+        flush();
+    }
+
+    let out = '';
+    for (const c of chunks) {
+        const next = out ? `${out}\n\n${c}` : c;
+        if (next.length > maxChars) {
+            if (!out) out = c.slice(0, maxChars);
+            break;
+        }
         out = next;
     }
     return out;
