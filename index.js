@@ -31,7 +31,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.0'; // keep in sync with manifest.json
+const VERSION = '0.8.1'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'style.css', 'manifest.json'];
@@ -844,15 +844,18 @@ function roleNotice(dis) {
 function targetSwitch(dis) {
     const t = ui();
     const active = hasActivePersona();
-    const seg = (v, icon, label, extra = '') => `
-<label class="pw-seg-opt ${state.target === v ? 'on' : ''} ${extra}">
+    // The persona's name sits on its own line under the label and is cut with an ellipsis,
+    // so a long name cannot squeeze the label or push the panel wider than the phone.
+    const seg = (v, icon, label, sub = '', extra = '') => `
+<label class="pw-seg-opt ${state.target === v ? 'on' : ''} ${extra}"${sub ? ` title="${esc(sub)}"` : ''}>
   <input type="radio" name="pw_target" value="${v}" data-field="target" ${state.target === v ? 'checked' : ''} ${v === 'active' && !active ? 'disabled' : ''} ${dis}>
-  <i class="fa-solid ${icon}"></i> ${label}
+  <i class="fa-solid ${icon}"></i>
+  <span class="pw-seg-text"><span>${esc(label)}</span>${sub ? `<small class="pw-seg-sub">${esc(sub)}</small>` : ''}</span>
 </label>`;
     return `
-<div class="pw-seg" role="radiogroup">
-  ${seg('new', 'fa-user-plus', esc(t.targetNew))}
-  ${seg('active', 'fa-user-pen', `${esc(t.targetActive)}${active ? ` <small>${esc(name1)}</small>` : ''}`, active ? '' : 'pw-off')}
+<div class="pw-seg pw-seg-target" role="radiogroup">
+  ${seg('new', 'fa-user-plus', t.targetNew)}
+  ${seg('active', 'fa-user-pen', t.targetActive, active ? name1 : '', active ? '' : 'pw-off')}
 </div>
 ${state.target === 'active' ? `<button class="menu_button pw-mini" data-act="loadActive" ${dis}><i class="fa-solid fa-file-import"></i> ${esc(t.loadActive)}</button>` : ''}`;
 }

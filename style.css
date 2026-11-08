@@ -94,7 +94,11 @@
 
 #pw_overlay .pw-body {
     flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
+    /* Phones: a long name or an unbroken Thai line must wrap, never make the body pan sideways. */
+    overflow-x: hidden;
+    overflow-wrap: anywhere;
     padding: 12px 14px;
     display: flex;
     flex-direction: column;
@@ -172,6 +176,7 @@
 #pw_overlay .menu_button {
     width: auto;
     margin: 0;
+    gap: 6px; /* ST's button is flex, which drops the space between icon and label */
     flex: 0 0 auto;
     white-space: nowrap;
     padding: 6px 12px;
@@ -757,6 +762,37 @@
     font-weight: 400;
 }
 
+/* New / Update active persona: two equal halves; the persona name gets its own line and an ellipsis. */
+#pw_overlay .pw-seg-target {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#pw_overlay .pw-seg-target .pw-seg-opt {
+    min-width: 0;
+    white-space: normal;
+    text-align: left;
+    padding: 8px 12px;
+}
+
+#pw_overlay .pw-seg-target .pw-seg-opt > i {
+    flex: 0 0 auto;
+}
+
+#pw_overlay .pw-seg-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+#pw_overlay .pw-seg-sub {
+    font-size: 0.8em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* name */
 
 #pw_overlay .pw-namerow input {
@@ -772,11 +808,13 @@
 
 #pw_overlay .pw-names {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
     gap: 6px;
 }
 
 #pw_overlay .pw-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -910,12 +948,10 @@
     }
 
     #pw_overlay .pw-names {
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    #pw_overlay .pw-seg:not(.pw-seg-wrap) .pw-seg-opt {
-        min-width: 0;
-        white-space: normal;
-        text-align: center;
+    #pw_overlay .pw-seg-target .pw-seg-opt {
+        padding: 8px 10px;
     }
 }
