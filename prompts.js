@@ -51,7 +51,7 @@ function budgetLine(size) {
 
 export function languageRule(lang) {
     if (lang === 'th') {
-        return 'Write in natural, vivid Thai, the way a Thai novelist would, not a translation. Word limits are approximate for Thai: keep clauses short. Do NOT put a space directly before or after [[user]], [[char]] or any character name when it touches Thai text: write "ไป[[user]]ที่" and never "ไป [[user]] ที่".';
+        return 'Write in natural, vivid Thai, the way a Thai novelist would, not a translation. Word limits are approximate for Thai: keep clauses short. Do NOT put a space directly before or after [[user]], [[char]] or any character name when it touches Thai text: write "ไป[[user]]ที่" and never "ไป [[user]] ที่". Writing in Thai does not make the world Thai: names, places and customs still follow [[char]]\'s setting.';
     }
     if (lang === 'en') return 'Write in natural English.';
     return 'Write in the same language as the author\'s notes.';
@@ -223,7 +223,7 @@ export function namesSpec({ source = 'mix', hasWorld = false, count = NAMES_PER_
         + 'GIMMICK (at most 20 words) turns that meaning into something playable for [[user]]: an irony between the name and the person, a habit or superstition, a power or a curse, how people react on hearing it, a nickname, the status it carries (old house, fallen house, commoner, foreigner, an alias hiding the truth). The gimmick must fit the premise. '
         + 'Each name must fit [[user]]\'s gender and the culture of [[char]]\'s world. Make them varied in meaning, status and sound. '
         + 'Never reuse [[char]]\'s own name or the name of a character already in the world; reuse a family or house only as a deliberate story point and say so in the gimmick. If the card fixes [[user]]\'s role, every name fits that role\'s origin and standing. '
-        + 'Write each name in the script the setting uses (as the card and lorebook write names); write meaning and gimmick in the output language. '
+        + 'The culture, sound and script of every name come from [[char]]\'s world (as the card and lorebook write names), NEVER from the output language or the language of the author\'s notes: a Western setting gets Western names in Latin letters even when everything else is written in Thai; a Thai setting gets Thai names in Thai script. Only meaning and gimmick are written in the output language. '
         + nameSourceRule(source, hasWorld);
 }
 

@@ -537,3 +537,12 @@ test('worldNameList reads an embedded character_book and leaves out GM-only titl
     ];
     assert.equal(worldNameList(embedded), 'Elder Jiu 酒长老, Jiu, Cold Pool, pool');
 });
+
+test('names follow the world, not the output language; padded quotes around a meaning are stripped', () => {
+    const p = buildNamesPrompt({ lang: 'th', notes: 'เพื่อนสมัยเด็ก', charCard: { name: 'Ashton', text: 'A rich heir in Boston.' } });
+    assert.match(p.prompt, /NEVER from the output language/);
+    assert.match(p.prompt, /Latin letters/);
+    assert.match(p.systemPrompt, /does not make the world Thai/);
+    const [n] = parseNameLines('Clara Whitmore | "the beloved" | nobody calls her that');
+    assert.equal(n.meaning, 'the beloved');
+});
