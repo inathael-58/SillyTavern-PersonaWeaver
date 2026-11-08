@@ -14,6 +14,8 @@ Extensions → Install extension → paste this repository's URL. Or copy the fo
 
 Open it from the wand menu next to the chat box, from the Extensions panel, or with `/persona-weaver` (alias `/pweave`).
 
+If it won't open or looks wrong on a phone: Extensions → Persona Weaver → **ตรวจปัญหา** (Diagnose), or `/pweave-debug`. It opens the weaver, measures what is really on screen, and gives you a report to copy and send.
+
 ## API and asking first
 
 Pick the API Weaver uses: SillyTavern's main connection, or any Connection Manager profile (for example a cheap, fast model just for persona work). The choice is in the bar at the top of the window and in the Extensions panel.
