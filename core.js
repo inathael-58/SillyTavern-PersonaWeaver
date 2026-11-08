@@ -289,6 +289,20 @@ export function namingScript({ charName = '', worldNames = '', cardText = '' } =
     return '';
 }
 
+/**
+ * Keep only the world names written in the world's own script. A lorebook whose titles were
+ * written in the author's language (Thai titles for a Western bot) would otherwise pull every
+ * suggestion toward the author's culture.
+ */
+export function worldNamesInScript(worldNames, script) {
+    const list = String(worldNames ?? '').split(/\s*,\s*/).filter(Boolean);
+    if (!script) return list.join(', ');
+    return list.filter(n => {
+        const s = scriptOf(n);
+        return !s || s === script;
+    }).join(', ');
+}
+
 /** Drop suggested names written in another script than the world's. */
 export function keepNamesInScript(names, script) {
     if (!script) return names;

@@ -5,7 +5,7 @@ import {
     parseTagged, parseLore, splitKeys, assemblePersona, parsePersona, applyPatch, changedKeys,
     buildTranscript, styleStats, loreBookName, loreEntryFields, estimateTokens,
     SIZES, sizeKey, sizeSpec, capLines, fitLayer, newerVersion, parseIdeas, mergeIdeas, ideaSplit, LABELS,
-    parseNameLines, mergeNames, worldNameList, NAMES_PER_BATCH, extractUserRole, scriptOf, namingScript, keepNamesInScript,
+    parseNameLines, mergeNames, worldNameList, NAMES_PER_BATCH, extractUserRole, scriptOf, namingScript, keepNamesInScript, worldNamesInScript,
 } from '../core.js';
 import { buildWeavePrompt, buildMinePrompt, buildEvolvePrompt, buildLorePrompt, buildCondensePrompt, blockSpecs, buildIdeasPrompt, genderRule, buildNamesPrompt, buildNameMeaningPrompt, buildNameGimmickPrompt } from '../prompts.js';
 import { STRINGS, fmt, resolveUiLang } from '../i18n.js';
@@ -558,8 +558,18 @@ test('naming script comes from the bot, and off-script names are dropped', () =>
     assert.deepEqual(keepNamesInScript(names, 'latin').map(n => n.name), ['Clara Whitmore']);
     assert.equal(keepNamesInScript(names, '').length, 2);
     const p = buildNamesPrompt({ lang: 'en', notes: 'เพื่อนสมัยเด็ก', charCard: { name: 'Ashton', text: 'A rich heir.' }, nameScript: 'latin' });
-    assert.match(p.prompt, /NAME SCRIPT: .*Latin letters \(like "Ashton"\)/);
+    assert.match(p.prompt, /NAME SCRIPT AND CULTURE: .*Latin letters \(like "Ashton"\)/);
+    assert.match(p.prompt, /romanized Thai name in a Western setting/);
     const w = buildWeavePrompt({ lang: 'en', notes: 'x', charCard: { name: 'Ashton', text: 'A rich heir.' }, withNames: true, nameScript: 'latin' });
     assert.match(w.prompt, /NAME SCRIPT/);
     assert.doesNotMatch(buildNamesPrompt({ lang: 'en', notes: 'x' }).prompt, /NAME SCRIPT/);
+});
+
+test('the notes language is never a clue about who the persona is; world names keep the world script', () => {
+    for (const lang of ['en', 'th']) {
+        const p = buildWeavePrompt({ lang, notes: 'เพื่อนสมัยเด็ก', charCard: { name: 'Ashton', text: 'A rich heir.' } });
+        assert.match(p.systemPrompt, /says nothing about \[\[user\]\]/);
+    }
+    assert.equal(worldNamesInScript('Boston, บ้านริมน้ำ, Harbor Club, 2024', 'latin'), 'Boston, Harbor Club, 2024');
+    assert.equal(worldNamesInScript('Boston, บ้านริมน้ำ', ''), 'Boston, บ้านริมน้ำ');
 });
