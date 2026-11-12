@@ -32,7 +32,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.5'; // keep in sync with manifest.json
+const VERSION = '0.8.6'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'diagnostics.js', 'style.css', 'manifest.json'];

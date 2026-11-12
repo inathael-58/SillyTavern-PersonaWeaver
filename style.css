@@ -955,3 +955,18 @@
         padding: 8px 10px;
     }
 }
+
+/* ---------------------------------------------------------------- solid surfaces
+   Blur Tint often carries alpha: glass themes pair it with a backdrop blur. A surface
+   with no blur of its own (a sticky header, or any panel once Fast UI's body.no-blur
+   strips every backdrop-filter) would let the chat or the list underneath show through,
+   so those paint the tint with its alpha dropped. `/ 1` matters: relative colour keeps
+   the source alpha when it is left out. */
+#pw_overlay, #pw_confirm { --pw-solid: var(--SmartThemeBlurTintColor, #1c1c1f); }
+@supports (color: rgb(from red r g b / 1)) {
+    #pw_overlay, #pw_confirm { --pw-solid: rgb(from var(--SmartThemeBlurTintColor, #1c1c1f) r g b / 1); }
+}
+#pw_overlay .pw-panel,
+#pw_confirm .pw-confirm { background: var(--pw-solid); }
+#pw_overlay .pw-busy { background: color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 25%, var(--pw-solid)); }
+#pw_overlay .pw-step-done .pw-step-num { color: var(--pw-solid); }
