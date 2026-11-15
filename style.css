@@ -970,3 +970,14 @@
 #pw_confirm .pw-confirm { background: var(--pw-solid); }
 #pw_overlay .pw-busy { background: color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 25%, var(--pw-solid)); }
 #pw_overlay .pw-step-done .pw-step-num { color: var(--pw-solid); }
+
+/* แม่แบบสีที่อ่านออกเสมอ (theme-palette.js) — เฉพาะแผงที่แสดงข้อมูล: พื้นทึบ และสีเน้น/ตัวอักษรตัดกับพื้นจริง
+   ทำงานเมื่อคำนวณสีสำเร็จแล้วเท่านั้น (<html class="pw-pal">) ถ้าไม่สำเร็จจะใช้สีธีมตรง ๆ แบบเดิม */
+html.pw-pal :is(#pw_overlay, #pw_confirm, #pw_settings_root) {
+    --SmartThemeBlurTintColor: var(--pw-p-surface);
+    --SmartThemeBodyColor: var(--pw-p-fg);
+    --SmartThemeQuoteColor: var(--pw-p-accent-text);
+    --SmartThemeEmColor: var(--pw-p-em);
+    --SmartThemeUnderlineColor: var(--pw-p-underline);
+    --SmartThemeBorderColor: var(--pw-p-line);
+}

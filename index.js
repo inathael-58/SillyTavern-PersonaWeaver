@@ -22,6 +22,7 @@ import { getContext } from '../../../st-context.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { createDiagnostics } from './diagnostics.js';
+import { installThemePalette } from './theme-palette.js';
 import { getTokenCountAsync } from '../../../tokenizers.js';
 import { createWorldInfoEntry, loadWorldInfo, saveWorldInfo, updateWorldInfoList, world_names } from '../../../world-info.js';
 
@@ -32,10 +33,10 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.6'; // keep in sync with manifest.json
+const VERSION = '0.8.7'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
-const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'diagnostics.js', 'style.css', 'manifest.json'];
+const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'diagnostics.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
 // Extensions > Persona Weaver > Diagnose (and /pweave-debug): opens the weaver, measures it, reports.
 const DIAG = createDiagnostics({
@@ -1599,6 +1600,8 @@ function registerSlashCommand() {
 
 jQuery(() => {
     settings();
+    // สีที่อ่านออกเสมอ: แผงข้อมูลทึบ สีเน้นตัดกับพื้นจริง (ดู theme-palette.js)
+    try { installThemePalette({ prefix: 'pw' }); } catch (err) { console.warn('[Persona Weaver] theme palette', err); }
     const restored = restoreDraft();
     mountSettings();
     registerSlashCommand();
