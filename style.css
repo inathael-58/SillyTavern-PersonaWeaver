@@ -1044,3 +1044,7 @@ body.reduced-motion #pw_overlay .fa-spin { animation: none; }
     #pw_overlay .pw-head { padding-top: max(10px, env(safe-area-inset-top)); }
     #pw_overlay .pw-foot { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 }
+
+/* ST's plain .menu_button is display:flex, which drops the space between an icon and its
+   label. Zero-specificity roots, so a gap this extension already sets still wins. */
+:where([id^="pw_"], [class^="pw-"], [class*=" pw-"]) .menu_button { gap: 0.4em; }
