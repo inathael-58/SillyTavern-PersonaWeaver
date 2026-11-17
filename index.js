@@ -33,7 +33,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.7'; // keep in sync with manifest.json
+const VERSION = '0.8.8'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'diagnostics.js', 'theme-palette.js', 'style.css', 'manifest.json'];
@@ -106,6 +106,7 @@ const state = {
 
     busy: false,
     sendingTo: '',
+    lastError: '', // shown inline under the API bar until dismissed or the next request
     lastCall: null,
     tokenCount: 0,
     initialised: false,
@@ -302,6 +303,7 @@ async function run(task) {
     if (state.busy) return;
     state.busy = true;
     state.lastRaw = '';
+    state.lastError = '';
     render();
     try {
         await task();
@@ -310,7 +312,8 @@ async function run(task) {
             toastr.info(err.message, ui().title, { timeOut: 2500 });
         } else {
             console.error('[Persona Weaver]', err);
-            toastr.error(String(err?.message ?? err), ui().title);
+            state.lastError = String(err?.message ?? err);
+            toastr.error(state.lastError, ui().title);
         }
     } finally {
         state.busy = false;
@@ -1119,6 +1122,7 @@ function layout() {
   <div class="pw-body">
     ${apiBar(dis)}
     ${state.busy && state.sendingTo ? `<div class="pw-busy"><i class="fa-solid fa-spinner fa-spin"></i> ${esc(fmt(t.busyTo, { api: state.sendingTo }))}</div>` : ''}
+    ${state.lastError && !state.busy ? `<div class="pw-error" role="alert"><i class="fa-solid fa-triangle-exclamation"></i><span>${esc(state.lastError)}</span><button class="pw-x" data-act="errClose" title="${esc(t.close)}"><i class="fa-solid fa-xmark"></i></button></div>` : ''}
     ${body}
     ${state.lastRaw ? `<details class="pw-raw"><summary>${esc(t.rawOutput)}</summary><pre>${esc(state.lastRaw)}</pre></details>` : ''}
   </div>
@@ -1368,6 +1372,7 @@ function onClick(event) {
         case 'evolveRun': evolve(); return;
         case 'evolveApply': applyEvolve(); render(); return;
         case 'undo': undo(); render(); return;
+        case 'errClose': state.lastError = ''; render(); return;
         case 'copy': copyText(); return;
         case 'save': save(); return;
         default:
