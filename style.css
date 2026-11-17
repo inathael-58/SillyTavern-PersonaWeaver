@@ -1044,3 +1044,17 @@ body.reduced-motion #pw_overlay .fa-spin { animation: none; }
     #pw_overlay .pw-head { padding-top: max(10px, env(safe-area-inset-top)); }
     #pw_overlay .pw-foot { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 }
+
+/* ST's plain .menu_button is display:flex, which drops the space between an icon and its
+   label. Zero-specificity roots, so a gap this extension already sets still wins. */
+:where([id^="pw_"], [class^="pw-"], [class*=" pw-"]) .menu_button { gap: 0.4em; }
+
+/* ST draws inputs with a grey film (var(--black30a)) that turns muddy on light themes.
+   In these panels, once the palette is ready, inputs take its card surface and readable
+   text instead, so no custom CSS is needed. */
+html.pw-pal :where(#pw_overlay, #pw_confirm, #pw_settings_root) :is(.text_pole, textarea, select, input:is([type="text"], [type="search"], [type="number"], [type="url"], [type="email"], [type="password"], :not([type]))) {
+    background-color: var(--pw-p-surface2);
+    color: var(--pw-p-fg);
+    border-color: var(--pw-p-line);
+}
+html.pw-pal :where(#pw_overlay, #pw_confirm, #pw_settings_root) :is(.text_pole, textarea, input)::placeholder { color: var(--pw-p-muted); opacity: 1; }
