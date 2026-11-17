@@ -1,5 +1,18 @@
 /* Persona Weaver — uses SillyTavern theme variables so it follows custom themes. */
 
+/* One visual system. Shape lock: actions, badges and step numbers are pills; the panel,
+   the confirm dialog and step cards are 12; everything inside a card is 8. No other radius.
+   States use --pw-warn / --pw-danger, insets use --pw-sunk; the palette block at the end
+   swaps all of them for readable, theme-matched values. */
+#pw_overlay, #pw_confirm, #pw_settings_root {
+    --pw-r-pill: 999px;
+    --pw-r-card: 12px;
+    --pw-r-ctl: 8px;
+    --pw-warn: var(--warning, #e0a43a);
+    --pw-danger: var(--fullred, #e5484d); /* slop-ok: fallback only when ST lacks --fullred */
+    --pw-sunk: rgba(0, 0, 0, 0.16);
+}
+
 /* SillyTavern puts a transform on <html> and html is 0px tall, so a fixed element
    that relies on top/bottom gets height 0. Give the overlay explicit viewport sizes. */
 #pw_overlay {
@@ -26,7 +39,7 @@
     background: var(--SmartThemeBlurTintColor, #1c1c1f);
     color: var(--SmartThemeBodyColor, #ddd);
     border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-radius: 12px;
+    border-radius: var(--pw-r-card);
     box-shadow: 0 8px 40px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.6));
     overflow: hidden;
 }
@@ -61,7 +74,7 @@
     background: transparent;
     color: inherit;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--pw-r-ctl);
     padding: 5px 12px;
     cursor: pointer;
     font: inherit;
@@ -120,7 +133,7 @@
 }
 
 #pw_overlay .pw-tokens.pw-warn {
-    color: var(--warning, #e0a43a);
+    color: var(--pw-warn);
     opacity: 1;
 }
 
@@ -237,7 +250,7 @@
     gap: 6px;
     padding: 8px;
     border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-radius: 8px;
+    border-radius: var(--pw-r-ctl);
 }
 
 #pw_overlay .pw-lore-entry .pw-row .text_pole {
@@ -250,8 +263,8 @@
     word-break: break-word;
     font-size: 0.88em;
     padding: 8px 10px;
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.22);
+    border-radius: var(--pw-r-ctl);
+    background: var(--pw-sunk);
 }
 
 #pw_overlay .pw-busy {
@@ -259,7 +272,7 @@
     top: 0;
     z-index: 1;
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: var(--pw-r-ctl);
     background: color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 25%, var(--SmartThemeBlurTintColor, #1c1c1f));
 }
 
@@ -269,7 +282,7 @@
     gap: 6px;
     padding: 8px;
     border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-radius: 8px;
+    border-radius: var(--pw-r-ctl);
 }
 
 #pw_overlay .pw-diff-cols {
@@ -343,16 +356,16 @@
 #pw_overlay .pw-stale {
     font-size: 0.75em;
     padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--warning, #e0a43a);
-    background: color-mix(in srgb, var(--warning, #e0a43a) 18%, transparent);
+    border-radius: var(--pw-r-pill);
+    border: 1px solid var(--pw-warn);
+    background: color-mix(in srgb, var(--pw-warn) 18%, transparent);
     color: inherit;
     cursor: pointer;
 }
 
 #pw_overlay .menu_button.pw-attn {
-    border-color: var(--warning, #e0a43a);
-    color: var(--warning, #e0a43a);
+    border-color: var(--pw-warn);
+    color: var(--pw-warn);
 }
 
 #pw_settings_root .pw-verline {
@@ -361,7 +374,7 @@
 }
 
 #pw_settings_root .pw-stale-text {
-    color: var(--warning, #e0a43a);
+    color: var(--pw-warn);
 }
 
 #pw_settings_root .pw-set-btns {
@@ -385,7 +398,7 @@
 #pw_overlay .pw-fresh {
     padding: 6px 10px;
     border-left: 3px solid var(--SmartThemeQuoteColor, #9b8cff);
-    border-radius: 4px;
+    border-radius: var(--pw-r-ctl);
     background: color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 8%, transparent);
 }
 
@@ -396,7 +409,7 @@
     gap: 4px;
     padding: 8px 10px;
     border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-radius: 8px;
+    border-radius: var(--pw-r-ctl);
     font-size: 0.92em;
 }
 
@@ -416,7 +429,7 @@
 #pw_overlay .pw-badge {
     font-size: 0.75em;
     padding: 1px 7px;
-    border-radius: 999px;
+    border-radius: var(--pw-r-pill);
     border: 1px solid var(--SmartThemeBorderColor, #444);
     opacity: 0.85;
     white-space: nowrap;
@@ -479,7 +492,7 @@
     flex-direction: column;
     gap: 10px;
     padding: 14px 16px;
-    border-radius: 12px;
+    border-radius: var(--pw-r-card);
     background: var(--SmartThemeBlurTintColor, #1c1c1f);
     color: var(--SmartThemeBodyColor, #ddd);
     border: 1px solid var(--SmartThemeQuoteColor, #9b8cff);
@@ -526,8 +539,8 @@
     word-break: break-word;
     font-size: 0.8em;
     padding: 8px 10px;
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.22);
+    border-radius: var(--pw-r-ctl);
+    background: var(--pw-sunk);
 }
 
 #pw_confirm .pw-confirm-btns {
@@ -559,7 +572,7 @@
 
 #pw_overlay .pw-step {
     border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-radius: 12px;
+    border-radius: var(--pw-r-card);
     background: color-mix(in srgb, var(--SmartThemeBodyColor, #ddd) 3%, transparent);
 }
 
@@ -588,7 +601,7 @@
     justify-content: center;
     width: 26px;
     height: 26px;
-    border-radius: 50%;
+    border-radius: var(--pw-r-pill);
     font-weight: 700;
     font-size: 0.9em;
     border: 1px solid var(--SmartThemeQuoteColor, #9b8cff);
@@ -616,7 +629,7 @@
 
 #pw_overlay .pw-step-caret {
     opacity: 0.6;
-    transition: transform 0.15s ease;
+    transition: transform var(--animation-duration, 125ms) cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 #pw_overlay .pw-step[open] .pw-step-caret {
@@ -693,7 +706,7 @@
     display: flex;
     gap: 0;
     border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-radius: 10px;
+    border-radius: var(--pw-r-ctl);
     overflow: hidden;
 }
 
@@ -710,7 +723,7 @@
 #pw_overlay .pw-seg-wrap .pw-seg-opt:last-child {
     flex: 0 1 auto;
     border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-radius: 999px;
+    border-radius: var(--pw-r-pill);
     padding: 6px 12px;
 }
 
@@ -821,7 +834,7 @@
     gap: 2px;
     text-align: left;
     padding: 7px 9px;
-    border-radius: 9px;
+    border-radius: var(--pw-r-ctl);
     border: 1px solid var(--SmartThemeBorderColor, #444);
     background: transparent;
     color: inherit;
@@ -860,7 +873,7 @@
     flex-direction: column;
     gap: 6px;
     padding: 10px;
-    border-radius: 10px;
+    border-radius: var(--pw-r-ctl);
     border: 1px dashed color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 55%, transparent);
     background: color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 6%, transparent);
 }
@@ -892,14 +905,14 @@
     flex-direction: column;
     gap: 5px;
     padding: 9px 11px;
-    border-radius: 10px;
+    border-radius: var(--pw-r-ctl);
     border-left: 3px solid var(--SmartThemeQuoteColor, #9b8cff);
     background: color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 9%, transparent);
 }
 
 #pw_overlay .pw-role-off {
     border-left-color: var(--SmartThemeBorderColor, #444);
-    background: rgba(0, 0, 0, 0.12);
+    background: var(--pw-sunk);
 }
 
 #pw_overlay .pw-role-head i {
@@ -923,8 +936,8 @@
 
 #pw_overlay .pw-sec {
     padding: 8px 10px;
-    border-radius: 10px;
-    background: rgba(0, 0, 0, 0.12);
+    border-radius: var(--pw-r-ctl);
+    background: var(--pw-sunk);
 }
 
 #pw_overlay .pw-sec-head small {
@@ -980,4 +993,54 @@ html.pw-pal :is(#pw_overlay, #pw_confirm, #pw_settings_root) {
     --SmartThemeEmColor: var(--pw-p-em);
     --SmartThemeUnderlineColor: var(--pw-p-underline);
     --SmartThemeBorderColor: var(--pw-p-line);
+    --pw-warn: var(--pw-p-warn);
+    --pw-danger: var(--pw-p-danger);
+    --pw-sunk: var(--pw-p-surface2);
+}
+
+/* ---------------------------------------------------------------- inline error */
+/* Sticky like the busy bar: the button that failed is usually far down the body. */
+#pw_overlay .pw-error {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--pw-r-ctl);
+    border-left: 3px solid var(--pw-danger);
+    background: color-mix(in srgb, var(--pw-danger) 10%, var(--pw-solid));
+    overflow-wrap: anywhere;
+}
+#pw_overlay .pw-error > i { color: var(--pw-danger); margin-top: 0.2em; }
+#pw_overlay .pw-error > span { flex: 1 1 auto; min-width: 0; }
+#pw_overlay .pw-error .pw-x { font-size: 1em; padding: 0 4px; }
+
+/* ---------------------------------------------------------------- press feedback + motion
+   Feedback lands on press-in. Buttons and cards shrink a little; segmented options and
+   tabs tint instead (scaling one part of a joined bar looks broken). ST sets
+   --animation-duration to 0 and adds body.reduced-motion when Reduced Motion is on. */
+:is(#pw_overlay, #pw_confirm) :is(.menu_button, .pw-name, .pw-x, .pw-stale) {
+    transition: transform var(--animation-duration, 125ms) cubic-bezier(0.23, 1, 0.32, 1);
+}
+:is(#pw_overlay, #pw_confirm) :is(.menu_button, .pw-name, .pw-x, .pw-stale):active:not([disabled]) {
+    transform: scale(0.97);
+}
+#pw_overlay :is(.pw-tab, .pw-seg-opt):active {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #9b8cff) 14%, transparent);
+}
+body.reduced-motion :is(#pw_overlay, #pw_confirm) :is(.menu_button, .pw-name, .pw-x, .pw-stale):active {
+    transform: none;
+}
+body.reduced-motion #pw_overlay .fa-spin { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+    #pw_overlay .fa-spin { animation: none; }
+}
+
+/* Phones: the panel is full screen, so keep the close button clear of the notch and the
+   footer buttons clear of the home indicator (env() is 0 where there is neither). */
+@media (max-width: 700px) {
+    #pw_overlay .pw-head { padding-top: max(10px, env(safe-area-inset-top)); }
+    #pw_overlay .pw-foot { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 }
