@@ -174,7 +174,10 @@ export const STRINGS = {
         task_mine: 'Analyze {n} of your messages',
         task_evolve: 'Propose changes from the recent story',
         errTimeout: 'No answer within {n} seconds. Raise "Seconds to wait for an answer" in Extensions → Persona Weaver, or pick a faster API.',
-        errEmpty: 'The API sent back an empty answer (often a safety filter or an exhausted quota).',
+        errEmpty: 'The API sent back an empty answer. Usually a safety filter, an exhausted quota, or a thinking model (DeepSeek, R1, o-series) that used the whole answer budget on its reasoning: raise "Max tokens" in Extensions → Persona Weaver.',
+        errThinking: 'The model used all {n} answer tokens on its thinking and wrote no answer. Raise "Max tokens" in Extensions → Persona Weaver, or lower the reasoning effort in the API preset.',
+        thinkingRetry: 'The model spent all {n} tokens thinking and wrote no answer (the provider still counts those tokens). It will get more room from now on. Send again?',
+        confirmThinking: '(more room: this API thinks before answering)',
         errNoProfiles: 'Connection Manager is not available. Turn it on, or pick the main API.',
         lastCall: 'Last request: {api}, {s} s',
 
@@ -388,7 +391,10 @@ export const STRINGS = {
         task_mine: 'วิเคราะห์ข้อความของคุณ {n} ข้อความ',
         task_evolve: 'เสนอการเปลี่ยนแปลงจากเรื่องล่าสุด',
         errTimeout: 'ไม่ตอบภายใน {n} วินาที เพิ่ม “รอคำตอบนานสุด” ได้ที่ Extensions → Persona Weaver หรือเลือก API ที่เร็วกว่า',
-        errEmpty: 'API ตอบกลับมาว่างเปล่า (มักเป็นเพราะ safety filter หรือโควต้าหมด)',
+        errEmpty: 'API ตอบกลับมาว่างเปล่า มักเป็นเพราะ safety filter, โควต้าหมด หรือโมเดลที่คิดก่อนตอบ (DeepSeek, R1, o-series) ใช้โทเคนคำตอบหมดไปกับการคิด ให้เพิ่ม “โทเคนสูงสุด” ที่ Extensions → Persona Weaver',
+        errThinking: 'โมเดลใช้โทเคนคำตอบทั้ง {n} ไปกับการคิดจนไม่ได้เขียนคำตอบ เพิ่ม “โทเคนสูงสุด” ที่ Extensions → Persona Weaver หรือลด reasoning effort ใน preset ของ API',
+        thinkingRetry: 'โมเดลคิดจนใช้โทเคนหมดทั้ง {n} แต่ไม่ได้เขียนคำตอบ (ผู้ให้บริการยังนับโทเคนส่วนนั้น) จากนี้จะให้พื้นที่ตอบมากขึ้นอัตโนมัติ ส่งอีกครั้งไหม',
+        confirmThinking: '(เพิ่มพื้นที่ให้แล้ว เพราะ API นี้คิดก่อนตอบ)',
         errNoProfiles: 'Connection Manager ใช้งานไม่ได้ เปิดมันก่อน หรือเลือก API หลักของ ST',
         lastCall: 'ส่งครั้งล่าสุด: {api} ใช้ {s} วินาที',
 

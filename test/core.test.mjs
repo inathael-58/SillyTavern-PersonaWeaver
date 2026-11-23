@@ -573,3 +573,26 @@ test('the notes language is never a clue about who the persona is; world names k
     assert.equal(worldNamesInScript('Boston, บ้านริมน้ำ, Harbor Club, 2024', 'latin'), 'Boston, Harbor Club, 2024');
     assert.equal(worldNamesInScript('Boston, บ้านริมน้ำ', ''), 'Boston, บ้านริมน้ำ');
 });
+
+test('thinking models: reasoning with no answer is detected, answers are kept', async () => {
+    const { splitThinking, thinkingBudget, THINKING_CAP } = await import('../core.js');
+    // reasoning in its own field (DeepSeek reasoning_content), empty content
+    assert.deepEqual(splitThinking('', 'Let me think about the persona...'), { text: '', thinking: true });
+    assert.deepEqual(splitThinking('   \n', 'x'), { text: '', thinking: true });
+    // a plain empty answer is not "thinking"
+    assert.deepEqual(splitThinking('', ''), { text: '', thinking: false });
+    assert.deepEqual(splitThinking(undefined, undefined), { text: '', thinking: false });
+    // inline think block, closed, with an answer after it
+    assert.deepEqual(splitThinking('<think>hmm</think>\n<core>Hi</core>'), { text: '<core>Hi</core>', thinking: true });
+    // inline think block cut off mid-thought: no answer
+    assert.deepEqual(splitThinking('<think>still thinking about'), { text: '', thinking: true });
+    assert.deepEqual(splitThinking('<thinking>a</thinking>  '), { text: '', thinking: true });
+    // a normal answer passes through untouched, even with reasoning beside it
+    assert.deepEqual(splitThinking('<core>Hi</core>', 'thought'), { text: '<core>Hi</core>', thinking: true });
+    assert.deepEqual(splitThinking('plain answer'), { text: 'plain answer', thinking: false });
+    // budget grows, never shrinks, and is capped
+    assert.equal(thinkingBudget(1000), 4000);
+    assert.equal(thinkingBudget(1500), 6000);
+    assert.equal(thinkingBudget(8000), THINKING_CAP);
+    assert.equal(thinkingBudget(20000), 20000);
+});

@@ -571,6 +571,39 @@ export function estimateTokens(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Thinking models (DeepSeek reasoner, R1, o-series, Gemini thinking...)
+//
+// Their reasoning counts against max_tokens. With a small budget they can spend all of it
+// thinking and send back reasoning with no answer: the provider bills the tokens, but the
+// answer the extension gets is empty. Some providers return the reasoning in its own field,
+// others inline as <think>...</think> at the start of the content.
+// ---------------------------------------------------------------------------
+
+/** Answer budget for a source known to think first. */
+export const THINKING_MULTIPLIER = 4;
+export const THINKING_CAP = 16000;
+export function thinkingBudget(base) {
+    const n = Math.max(1, Math.round(Number(base) || 0));
+    return Math.max(n, Math.min(n * THINKING_MULTIPLIER, THINKING_CAP));
+}
+
+/**
+ * Split a reply into the answer and the model's thinking.
+ * Removes complete <think>/<thinking>/<reasoning> blocks, and an unclosed one at the start
+ * (the model was cut off mid-thought).
+ * @returns {{text:string, thinking:boolean}} thinking: there was reasoning, in its own field or inline
+ */
+export function splitThinking(content, reasoning = '') {
+    let text = String(content ?? '');
+    let thinking = Boolean(String(reasoning ?? '').trim());
+    const closed = /<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi;
+    if (closed.test(text)) { thinking = true; text = text.replace(closed, ''); }
+    const open = /^\s*<(think|thinking|reasoning)>[\s\S]*$/i;
+    if (open.test(text)) { thinking = true; text = ''; }
+    return { text: text.trim() ? text.replace(/^\s+/, '') : '', thinking };
+}
+
+// ---------------------------------------------------------------------------
 // Chat -> transcript / style statistics
 // ---------------------------------------------------------------------------
 

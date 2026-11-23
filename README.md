@@ -22,6 +22,8 @@ Pick the API Weaver uses: SillyTavern's main connection, or any Connection Manag
 
 **Nothing is sent without asking.** Before every request a dialog shows the task, the API it will go to (you can switch it right there), roughly how many tokens go out and the maximum that can come back, and, on demand, the exact text being sent. *Cancel* sends nothing. There is no silent fallback to another API.
 
+**Thinking models** (DeepSeek reasoner / v4 pro, R1, o-series, Gemini thinking) count their reasoning against the answer limit. With a small limit they can think until it runs out and send back no answer, while the provider still bills those tokens. Weaver notices when a reply holds reasoning but no answer, says so, remembers that this API thinks first, and offers to send again with four times the room (up to 16 000 tokens). From then on the dialog gives that API the larger limit and says why. If it still runs out, raise *Max tokens* in the Extensions panel or lower the reasoning effort in the API's preset.
+
 ## Persona size
 
 The persona is in the prompt on every turn, so Weaver writes to a budget:

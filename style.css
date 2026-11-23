@@ -521,6 +521,14 @@
     font-size: 0.85em;
 }
 
+#pw_confirm .pw-hint.pw-confirm-note {
+    opacity: 1;
+    padding: 8px 10px;
+    border-radius: var(--pw-r-ctl);
+    border-left: 3px solid var(--pw-warn);
+    background: color-mix(in srgb, var(--pw-warn) 14%, transparent);
+}
+
 #pw_confirm select {
     width: 100%;
     max-width: 100%;

@@ -33,7 +33,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.9'; // keep in sync with manifest.json
+const VERSION = '0.8.10'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'diagnostics.js', 'theme-palette.js', 'style.css', 'manifest.json'];
@@ -66,6 +66,8 @@ const DEFAULTS = Object.freeze({
     namesWithWeave: true,
     source: 'main',
     timeoutSec: 120,
+    /** Sources that once sent back reasoning with no answer: they get thinkingBudget() room. */
+    thinkingSources: {},
 });
 /** Warn when the persona is this much over its size budget. */
 const BUDGET_SLACK = 1.15;
@@ -271,25 +273,55 @@ function budgetNow() {
  */
 async function callModel(p, responseLength, task) {
     const t = ui();
-    const src = await confirmRequest({ task, p, maxTokens: responseLength });
-    if (!src) throw new Cancelled(t.cancelled);
+    let note = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const pick = await confirmRequest({ task, p, maxTokens: responseLength, note });
+        if (!pick) throw new Cancelled(t.cancelled);
+        const { src, maxTokens } = pick;
 
-    const label = api.sourceLabel(src, t.apiMain);
-    state.sendingTo = label;
-    render();
-    const t0 = Date.now();
-    try {
-        const raw = await api.send(src, p, responseLength, settings().timeoutSec * 1000, {
-            timeout: n => fmt(t.errTimeout, { n }),
-            empty: t.errEmpty,
-            noProfiles: t.errNoProfiles,
-        });
-        state.lastRaw = raw;
-        return raw;
-    } finally {
-        state.lastCall = { label, ms: Date.now() - t0 };
-        state.sendingTo = '';
+        const label = api.sourceLabel(src, t.apiMain);
+        state.sendingTo = label;
+        render();
+        const t0 = Date.now();
+        try {
+            const raw = await api.send(src, p, maxTokens, settings().timeoutSec * 1000, {
+                timeout: n => fmt(t.errTimeout, { n }),
+                empty: t.errEmpty,
+                thinking: n => fmt(t.errThinking, { n }),
+                noProfiles: t.errNoProfiles,
+            });
+            state.lastRaw = raw;
+            return raw;
+        } catch (err) {
+            // A thinking model used the whole budget on its reasoning. Remember that this source
+            // thinks, so it gets more room from now on, and offer to send once more (the user
+            // still confirms: nothing goes out without asking).
+            if (!(err instanceof api.ThinkingOnly) || attempt > 0 || maxTokens >= core.thinkingBudget(responseLength)) throw err;
+            markThinking(src);
+            note = fmt(t.thinkingRetry, { n: maxTokens });
+        } finally {
+            state.lastCall = { label, ms: Date.now() - t0 };
+            state.sendingTo = '';
+            render();
+        }
     }
+    throw new Error(t.errEmpty);
+}
+
+function isThinking(src) {
+    return Boolean(settings().thinkingSources?.[src]);
+}
+
+function markThinking(src) {
+    const s = settings();
+    if (s.thinkingSources?.[src]) return;
+    s.thinkingSources = { ...(s.thinkingSources ?? {}), [src]: true };
+    saveSettingsDebounced();
+}
+
+/** Answer budget for a source: more room when it is known to think first. */
+function budgetFor(src, base) {
+    return isThinking(src) ? core.thinkingBudget(base) : base;
 }
 
 async function askBlocks(p, keys, responseLength, task) {
@@ -1177,14 +1209,21 @@ function refreshTokens() {
 // ---------------------------------------------------------------------------
 
 /**
- * Show what is about to be sent and where. Resolves to the chosen source id, or null.
+ * Show what is about to be sent and where. Resolves to { src, maxTokens }, or null.
  * The API can be changed right here; the choice is saved as the new default.
+ * maxTokens is the base budget; a source known to think first gets more (budgetFor).
+ * note: an extra line at the top, e.g. why this is being asked a second time.
  */
-function confirmRequest({ task, p, maxTokens }) {
+function confirmRequest({ task, p, maxTokens, note = '' }) {
     return new Promise((resolve) => {
         const t = ui();
         let src = api.resolveSource(settings().source);
         const inTokens = core.estimateTokens(`${p.systemPrompt}\n${p.prompt}`);
+        const costHtml = () => {
+            const m = budgetFor(src, maxTokens);
+            const extra = m > maxTokens ? ` ${esc(t.confirmThinking)}` : '';
+            return esc(fmt(t.confirmCost, { n: inTokens, m })) + extra;
+        };
         document.getElementById('pw_confirm')?.remove();
 
         const wrap = document.createElement('div');
@@ -1192,9 +1231,10 @@ function confirmRequest({ task, p, maxTokens }) {
         wrap.innerHTML = `
 <div class="pw-confirm" role="alertdialog" aria-modal="true" aria-labelledby="pw_confirm_title">
   <div class="pw-confirm-title" id="pw_confirm_title"><i class="fa-solid fa-paper-plane"></i> ${esc(t.confirmTitle)}</div>
+  ${note ? `<div class="pw-hint pw-confirm-note" role="status">${esc(note)}</div>` : ''}
   <div class="pw-confirm-row"><small>${esc(t.confirmTask)}</small><b>${esc(task)}</b></div>
   <label class="pw-confirm-row"><small>${esc(t.confirmApi)}</small>${sourceSelectHtml('data-c="src"')}</label>
-  <div class="pw-hint">${esc(fmt(t.confirmCost, { n: inTokens, m: maxTokens }))}</div>
+  <div class="pw-hint" data-c="cost">${costHtml()}</div>
   <details class="pw-raw"><summary>${esc(t.confirmPrompt)}</summary><pre>${esc(`${p.systemPrompt}\n\n────────\n\n${p.prompt}`)}</pre></details>
   <div class="pw-confirm-btns">
     <button class="menu_button" data-c="no">${esc(t.confirmCancel)}</button>
@@ -1219,10 +1259,12 @@ function confirmRequest({ task, p, maxTokens }) {
             settings().source = src;
             saveSettingsDebounced();
             syncSettingsApi();
+            const cost = wrap.querySelector('[data-c="cost"]');
+            if (cost) cost.innerHTML = costHtml();
         });
         wrap.addEventListener('click', (e) => {
             const b = e.target.closest('[data-c]');
-            if (b?.dataset.c === 'ok') finish(src);
+            if (b?.dataset.c === 'ok') finish({ src, maxTokens: budgetFor(src, maxTokens) });
             else if (b?.dataset.c === 'no' || e.target === wrap) finish(null);
         });
         document.addEventListener('keydown', onKeyConfirm, true);
