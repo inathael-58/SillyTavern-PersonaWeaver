@@ -35,6 +35,19 @@ export function mainDetail() {
     } catch { return ''; }
 }
 
+/**
+ * Whether Weaver can switch thinking off for this source. Only DeepSeek profiles: SillyTavern
+ * (since its DeepSeek V4 support, April 2026) sends DeepSeek `thinking: disabled` when include_reasoning is false.
+ * Other providers read include_reasoning differently (some only hide the reasoning), and the
+ * main connection takes no per-request override, so they keep what their preset says.
+ * DeepSeek's own reasoning_effort cannot help: on v4-pro "low" is raised to "high".
+ */
+export function canSkipThinking(src) {
+    if (!src || src === 'main') return false;
+    const p = profiles().find(x => x.id === src);
+    return String(p?.api ?? '').toLowerCase() === 'deepseek';
+}
+
 /** Human label for a source id. */
 export function sourceLabel(id, mainText = 'SillyTavern main API') {
     if (id === 'main') {
@@ -72,8 +85,9 @@ export class ThinkingOnly extends Error {
  * @param {number} maxTokens
  * @param {number} timeoutMs
  * @param {{timeout:(n:number)=>string, empty:string, thinking:(n:number)=>string, noProfiles:string}} msg error texts in the UI language
+ * @param {{noThinking?:boolean}} [opts] noThinking: ask a source canSkipThinking() to answer without thinking
  */
-export async function send(src, p, maxTokens, timeoutMs, msg) {
+export async function send(src, p, maxTokens, timeoutMs, msg, opts = {}) {
     const c = ctx();
     const seconds = Math.round(timeoutMs / 1000);
     let out;
@@ -97,7 +111,9 @@ export async function send(src, p, maxTokens, timeoutMs, msg) {
             { role: 'user', content: p.prompt },
         ];
         try {
-            const res = await svc.sendRequest(src, messages, maxTokens, { stream: false, signal: ac.signal, extractData: true, includePreset: true });
+            // The last argument overrides the preset for this request only (ST ignores it where unsupported).
+            const override = opts.noThinking && canSkipThinking(src) ? { include_reasoning: false } : {};
+            const res = await svc.sendRequest(src, messages, maxTokens, { stream: false, signal: ac.signal, extractData: true, includePreset: true }, override);
             out = typeof res === 'string' ? res : String(res?.content ?? '');
             reasoning = typeof res === 'string' ? '' : String(res?.reasoning ?? '');
         } catch (e) {
