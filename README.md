@@ -24,6 +24,8 @@ Pick the API Weaver uses: SillyTavern's main connection, or any Connection Manag
 
 **Thinking models** (DeepSeek reasoner / v4 pro, R1, o-series, Gemini thinking) count their reasoning against the answer limit. With a small limit they can think until it runs out and send back no answer, while the provider still bills those tokens. Weaver notices when a reply holds reasoning but no answer, says so, remembers that this API thinks first, and offers to send again with four times the room (up to 16 000 tokens). From then on the dialog gives that API the larger limit and says why. If it still runs out, raise *Max tokens* in the Extensions panel or lower the reasoning effort in the API's preset.
 
+**DeepSeek profiles answer without thinking by default.** DeepSeek v4-pro can think through thousands of tokens on a persona task and still write nothing, and its `reasoning_effort` cannot help (DeepSeek raises "low" to "high" on v4-pro). So on a DeepSeek Connection Manager profile, Weaver asks for `thinking: disabled` (SillyTavern's *Request model reasoning*, overridden for Weaver's own requests only; your chat keeps its preset). The confirm dialog says so. Tick *Let DeepSeek think before answering* in the Extensions panel to have it think again. Other APIs, and the main connection, follow their preset.
+
 ## Persona size
 
 The persona is in the prompt on every turn, so Weaver writes to a budget:

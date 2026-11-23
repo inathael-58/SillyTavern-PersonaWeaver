@@ -33,7 +33,7 @@ import { STRINGS, fmt, resolveUiLang } from './i18n.js';
 import * as prompts from './prompts.js';
 
 const MODULE = 'persona_weaver';
-const VERSION = '0.8.10'; // keep in sync with manifest.json
+const VERSION = '0.8.11'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 /** Every file of the extension, so a hard refresh can replace all of them in the browser cache. */
 const FILES = ['index.js', 'api.js', 'core.js', 'prompts.js', 'i18n.js', 'diagnostics.js', 'theme-palette.js', 'style.css', 'manifest.json'];
@@ -68,6 +68,8 @@ const DEFAULTS = Object.freeze({
     timeoutSec: 120,
     /** Sources that once sent back reasoning with no answer: they get thinkingBudget() room. */
     thinkingSources: {},
+    /** DeepSeek profiles: let the model think first (off = Weaver asks it to skip thinking). */
+    deepseekThink: false,
 });
 /** Warn when the persona is this much over its size budget. */
 const BUDGET_SLACK = 1.15;
@@ -289,7 +291,7 @@ async function callModel(p, responseLength, task) {
                 empty: t.errEmpty,
                 thinking: n => fmt(t.errThinking, { n }),
                 noProfiles: t.errNoProfiles,
-            });
+            }, { noThinking: thinkingOff(src) });
             state.lastRaw = raw;
             return raw;
         } catch (err) {
@@ -319,9 +321,14 @@ function markThinking(src) {
     saveSettingsDebounced();
 }
 
+/** True when Weaver asks this source to answer without thinking. */
+function thinkingOff(src) {
+    return !settings().deepseekThink && api.canSkipThinking(src);
+}
+
 /** Answer budget for a source: more room when it is known to think first. */
 function budgetFor(src, base) {
-    return isThinking(src) ? core.thinkingBudget(base) : base;
+    return isThinking(src) && !thinkingOff(src) ? core.thinkingBudget(base) : base;
 }
 
 async function askBlocks(p, keys, responseLength, task) {
@@ -1221,7 +1228,8 @@ function confirmRequest({ task, p, maxTokens, note = '' }) {
         const inTokens = core.estimateTokens(`${p.systemPrompt}\n${p.prompt}`);
         const costHtml = () => {
             const m = budgetFor(src, maxTokens);
-            const extra = m > maxTokens ? ` ${esc(t.confirmThinking)}` : '';
+            const extra = thinkingOff(src) ? ` ${esc(t.confirmNoThink)}`
+                : m > maxTokens ? ` ${esc(t.confirmThinking)}` : '';
             return esc(fmt(t.confirmCost, { n: inTokens, m })) + extra;
         };
         document.getElementById('pw_confirm')?.remove();
@@ -1550,6 +1558,8 @@ function mountSettings() {
     <small>${esc(t.setThaiHint)}</small>
     <label>${esc(t.setWeaveTokens)}<input id="pw_set_wt" class="text_pole" type="number" min="300" max="8000" step="100" value="${esc(s.weaveTokens)}"></label>
     <label>${esc(t.setOtherTokens)}<input id="pw_set_ot" class="text_pole" type="number" min="300" max="8000" step="100" value="${esc(s.otherTokens)}"></label>
+    <label class="checkbox_label"><input id="pw_set_dsthink" type="checkbox" ${s.deepseekThink ? 'checked' : ''}><span>${esc(t.setDsThink)}</span></label>
+    <small>${esc(t.setDsThinkHint)}</small>
     <label>${esc(t.setMsgs)}<input id="pw_set_msgs" class="text_pole" type="number" min="5" max="200" step="5" value="${esc(s.messages)}"></label>
     <div class="pw-verline">${esc(fmt(t.verRunning, { v: VERSION }))} <span data-pw-remote>${remoteHtml()}</span></div>
     <div class="pw-set-btns">
@@ -1587,6 +1597,7 @@ function mountSettings() {
     });
     wrap.querySelector('#pw_set_reload').addEventListener('click', reloadWithFreshFiles);
     wrap.querySelector('#pw_set_thai').addEventListener('change', (e) => { settings().thaiSpacing = e.target.checked; saveSettingsDebounced(); });
+    wrap.querySelector('#pw_set_dsthink').addEventListener('change', (e) => { settings().deepseekThink = e.target.checked; saveSettingsDebounced(); });
     wrap.querySelector('#pw_set_lang').addEventListener('change', (e) => { settings().lang = e.target.value; saveSettingsDebounced(); render(); });
     wrap.querySelector('#pw_set_ui').addEventListener('change', (e) => {
         settings().uiLang = e.target.value;
