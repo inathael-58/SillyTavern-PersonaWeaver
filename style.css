@@ -1041,9 +1041,18 @@ html.pw-pal :is(#pw_overlay, #pw_confirm, #pw_settings_root) {
 body.reduced-motion :is(#pw_overlay, #pw_confirm) :is(.menu_button, .pw-name, .pw-x, .pw-stale):active {
     transform: none;
 }
-body.reduced-motion #pw_overlay .fa-spin { animation: none; }
+/* The busy spinner is the only sign a request is still running: a still one reads as a hang.
+   It keeps turning under Reduced Motion (ST's setting and the OS one), just slower. Font Awesome
+   stops .fa-spin by itself under prefers-reduced-motion, hence its own keyframes and !important. */
+@keyframes pw-spin { to { transform: rotate(360deg); } }
+#pw_overlay .pw-busy .fa-spin {
+    animation: pw-spin 1s linear infinite !important;
+}
+body.reduced-motion #pw_overlay .pw-busy .fa-spin {
+    animation-duration: 2.4s !important;
+}
 @media (prefers-reduced-motion: reduce) {
-    #pw_overlay .fa-spin { animation: none; }
+    #pw_overlay .pw-busy .fa-spin { animation-duration: 2.4s !important; }
 }
 
 /* Phones: the panel is full screen, so keep the close button clear of the notch and the
