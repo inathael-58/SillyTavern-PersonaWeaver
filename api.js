@@ -3,6 +3,8 @@
 // There is no silent fallback to another API: index.js asks the user before every call,
 // and the request goes exactly where the user agreed to send it.
 
+import { splitThinking } from './core.js';
+
 const ctx = () => SillyTavern.getContext();
 
 /** Connection Manager profiles this SillyTavern can send to (empty when the extension is off). */
@@ -53,18 +55,29 @@ export function sourceOptions(mainText) {
     ];
 }
 
+/** Thrown when a thinking model spent the whole answer budget on its reasoning. */
+export class ThinkingOnly extends Error {
+    constructor(message, maxTokens) {
+        super(message);
+        this.name = 'ThinkingOnly';
+        this.maxTokens = maxTokens;
+    }
+}
+
 /**
- * Send one request. Throws on timeout, empty answer or API error.
+ * Send one request. Throws on timeout, empty answer or API error, and ThinkingOnly when the
+ * model sent back reasoning but no answer.
  * @param {string} src 'main' or a profile id
  * @param {{systemPrompt:string, prompt:string}} p
  * @param {number} maxTokens
  * @param {number} timeoutMs
- * @param {{timeout:(n:number)=>string, empty:string, noProfiles:string}} msg error texts in the UI language
+ * @param {{timeout:(n:number)=>string, empty:string, thinking:(n:number)=>string, noProfiles:string}} msg error texts in the UI language
  */
 export async function send(src, p, maxTokens, timeoutMs, msg) {
     const c = ctx();
     const seconds = Math.round(timeoutMs / 1000);
     let out;
+    let reasoning = '';
     if (src === 'main') {
         let timer;
         const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(msg.timeout(seconds))), timeoutMs); });
@@ -86,12 +99,16 @@ export async function send(src, p, maxTokens, timeoutMs, msg) {
         try {
             const res = await svc.sendRequest(src, messages, maxTokens, { stream: false, signal: ac.signal, extractData: true, includePreset: true });
             out = typeof res === 'string' ? res : String(res?.content ?? '');
+            reasoning = typeof res === 'string' ? '' : String(res?.reasoning ?? '');
         } catch (e) {
             if (ac.signal.aborted) throw new Error(msg.timeout(seconds));
             throw e;
         } finally { clearTimeout(timer); }
     }
-    out = String(out ?? '');
-    if (!out.trim()) throw new Error(msg.empty);
-    return out;
+    const { text, thinking } = splitThinking(out, reasoning);
+    if (!text.trim()) {
+        if (thinking) throw new ThinkingOnly(msg.thinking(maxTokens), maxTokens);
+        throw new Error(msg.empty);
+    }
+    return text;
 }
